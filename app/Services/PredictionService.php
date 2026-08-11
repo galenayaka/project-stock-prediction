@@ -31,16 +31,26 @@ final class PredictionService
      */
     public function predict(array $features, string $targetPeriod = '3m'): array
     {
-        $response = Http::withHeaders([
-            'Content-Type' => 'application/json',
-            'X-API-Key' => (string) config('services.ml_service.api_key', ''),
-        ])
-            ->timeout(60)
-            ->retry(2, 500)
-            ->post("{$this->baseUrl}/api/v1/predict", [
-                'features' => $features,
-                'target_period' => $targetPeriod,
-            ]);
+        try {
+            $response = Http::withHeaders([
+                'Content-Type' => 'application/json',
+                'X-API-Key' => (string) config('services.ml_service.api_key', ''),
+            ])
+                ->timeout(60)
+                ->retry(2, 500)
+                ->post("{$this->baseUrl}/api/v1/predict", [
+                    'features' => $features,
+                    'target_period' => $targetPeriod,
+                ]);
+        } catch (ConnectionException $e) {
+            Log::error('ML service unreachable', ['error' => $e->getMessage()]);
+
+            throw new \RuntimeException(
+                'AI prediction service is not running. Please start the ML service with: php artisan ml:start',
+                0,
+                $e,
+            );
+        }
 
         if ($response->failed()) {
             Log::error('ML service prediction request failed', [

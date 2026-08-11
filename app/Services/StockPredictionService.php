@@ -40,9 +40,9 @@ final class StockPredictionService
      * plus the latest known price, sends it to the Python AI microservice,
      * and stores the returned signal in the predictions table.
      *
-     * @param  Company  $company   The company to predict for
-     * @param  string   $timeframe One of: "1m", "3m", "6m", "1y"
-     * @return Prediction           The newly created Prediction model
+     * @param  Company  $company  The company to predict for
+     * @param  string  $timeframe  One of: "1m", "3m", "6m", "1y"
+     * @return Prediction The newly created Prediction model
      *
      * @throws \RuntimeException|ConnectionException
      */
@@ -153,6 +153,15 @@ final class StockPredictionService
                 'confidence' => $result['confidence_score'] ?? 0,
             ]);
 
+        } catch (ConnectionException $e) {
+            $message = 'AI prediction service is not running. Please start the ML service with: php artisan ml:start';
+            $prediction->markFailed($message);
+            Log::error('StockPredictionService: AI service unreachable', [
+                'prediction_id' => $prediction->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            throw new \RuntimeException($message, 0, $e);
         } catch (\Throwable $e) {
             $prediction->markFailed($e->getMessage());
             Log::error('StockPredictionService: prediction failed', [
@@ -375,11 +384,11 @@ final class StockPredictionService
      *
      * Confidence is always clamped between 30% (floor) and 95% (cap).
      *
-     * @param  string               $fundamentalSignal   'buy', 'hold', or 'sell'
-     * @param  array<string, mixed> $techMomentum        Result from calculateTechnicalMomentum()
-     * @param  list<array<string, mixed>> $keyDrivers     Fundamental drivers from Python
-     * @param  float                $confidenceScore     Current confidence (0-1)
-     * @param  array<string, mixed> $confidenceBreakdown Existing breakdown from Python
+     * @param  string  $fundamentalSignal  'buy', 'hold', or 'sell'
+     * @param  array<string, mixed>  $techMomentum  Result from calculateTechnicalMomentum()
+     * @param  list<array<string, mixed>>  $keyDrivers  Fundamental drivers from Python
+     * @param  float  $confidenceScore  Current confidence (0-1)
+     * @param  array<string, mixed>  $confidenceBreakdown  Existing breakdown from Python
      * @return array{adjusted_confidence: float, drivers: list<array<string, mixed>>, confidence_breakdown: array<string, mixed>}
      */
     private function applyTechnicalAlignment(
