@@ -2,6 +2,8 @@
 FastAPI Microservice for Stock Market Prediction
 ================================================
 
+Copyright (c) 2026 Galen Nayaka Nayottama. All rights reserved.
+
 This service provides a REST API that integrates **yfinance** for stock data
 retrieval and an **ML ensemble** (XGBoost + RandomForest) for price prediction.
 

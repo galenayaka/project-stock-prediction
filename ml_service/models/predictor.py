@@ -1,6 +1,8 @@
 """
 ML Predictor: the core AI engine that generates stock price predictions.
 
+Copyright (c) 2026 Galen Nayaka Nayottama. All rights reserved.
+
 This module contains the StockPredictor class — the central intelligence
 of the application. It supports TWO prediction modes:
 

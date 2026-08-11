@@ -869,7 +869,7 @@ python run_prod.py
 │ CL=F   76.4  │                              │ China stim.. │
 │ SPX   5,834  │ Strong Buy │ Strong Sell     │ ── Reuters   │
 │ DXY  104.87  │ Rank 1-5   │ Rank 1-5        │              │
-│ BTC   87.4K  │ compact    │ compact         │ ...15 items  │
+│ BTC   87.4K  │ compact    │ compact         │              │
 │              │            │                 │              │
 │ Macro Ind.   │ Company Cards (3-col grid)   │              │
 │ ──────────── │ ┌────┐┌────┐┌────┐          │              │
@@ -1047,3 +1047,14 @@ python ml_service/run_prod.py
 | `prediction_direction` | varchar | bullish/bearish/neutral |
 | `feature_importance` | JSON | `[{feature, importance, impact}]` |
 | `status` | varchar | pending/processing/completed/failed |
+---
+
+## License & Copyright
+
+© 2026 **Galen Nayaka Nayottama**. All rights reserved.
+
+This software and its accompanying documentation are the intellectual property of the author. Unauthorized reproduction, distribution, or modification of this software without explicit written permission is prohibited.
+
+For licensing inquiries, collaboration, or commercial use, please contact the author.
+
+**StockPrediction** — AI-Powered Stock Market Prediction Dashboard

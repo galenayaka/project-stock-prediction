@@ -1,6 +1,8 @@
 """
 Pydantic schemas for the ML prediction service.
 
+Copyright (c) 2026 Galen Nayaka Nayottama. All rights reserved.
+
 These models define the CONTRACT between Laravel (PHP) and FastAPI (Python).
 Every request and response is validated against these schemas — if a field
 is missing or has the wrong type, FastAPI returns a 422 error automatically.

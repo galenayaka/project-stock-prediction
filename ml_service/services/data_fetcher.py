@@ -1,6 +1,8 @@
 """
 Yahoo Finance data fetcher using the yfinance library.
 
+Copyright (c) 2026 Galen Nayaka Nayottama. All rights reserved.
+
 This module is the bridge between the ML prediction engine and real-world
 stock market data. It wraps the yfinance Python library (which itself wraps
 the Yahoo Finance API) into structured dataclasses that the predictor can

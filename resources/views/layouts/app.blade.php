@@ -106,6 +106,12 @@
         @yield('content')
     </main>
 
+    <!-- Footer -->
+    <footer class="w-full px-4 py-2 border-t border-noir-400 flex items-center justify-between text-[9px] font-mono text-mute-dim">
+        <span>STOCKPREDICTION v1.1.0</span>
+        <span>&copy; 2026 Galen Nayaka Nayottama. All rights reserved.</span>
+    </footer>
+
     @stack('scripts')
     <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
 </body>
