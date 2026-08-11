@@ -153,7 +153,15 @@ logger = logging.getLogger(__name__)
 # Global singleton instances
 #   - predictor : the ML ensemble (XGBoost + RandomForest)
 #   - fetcher   : wraps yfinance for all stock data retrieval
-# These are created once at import time and reused across every request.
+#
+# These are created ONCE at import time and reused across every HTTP request.
+# This is called the "singleton pattern" — instead of creating a new model
+# object for each prediction (which would be slow and memory-intensive), we
+# create one instance that stays in memory and handles all requests.
+#
+# IMPORTANT: the predictor is INITIALIZED (XGBoost + RandomForest objects
+# exist) but NOT YET TRAINED. Training only happens when someone calls
+# POST /api/v1/train. Until then, predictions use a weighted heuristic.
 # ---------------------------------------------------------------------------
 predictor = StockPredictor()
 fetcher = YFinanceFetcher()
@@ -165,18 +173,22 @@ fetcher = YFinanceFetcher()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Application lifecycle handler.
+    Application lifecycle handler — runs on startup and shutdown.
 
-    On **startup**: initialises the ML predictor (creates XGBoost and
-    RandomForest objects, but does NOT train them — training happens
-    separately via ``POST /api/v1/train``).
+    On **startup**: initialises the ML predictor. This creates the
+    XGBoost and RandomForest Python objects in memory, but does NOT
+    train them. Training requires labeled OHLCV data and happens
+    separately via ``POST /api/v1/train``.
 
-    On **shutdown**: logs a message.  No explicit cleanup is needed
-    because model objects are garbage-collected by Python.
+    Think of this like opening a toolbox before starting work:
+    the tools (models) are ready, but you haven't used them yet.
+
+    On **shutdown**: logs a message. Python's garbage collector will
+    free the model memory automatically — no manual cleanup needed.
     """
     logger.info("Starting ML Prediction Service...")
-    predictor.load_model()
-    yield
+    predictor.load_model()   # ← creates XGBRegressor + RandomForestRegressor objects
+    yield                     # ← the app runs while we're "inside" this context
     logger.info("Shutting down ML Prediction Service.")
 
 
@@ -598,22 +610,42 @@ def _compute_key_drivers(
     Analyse the enriched financial history to identify the top factors
     driving the prediction signal.
 
-    Checks for:
-        - EPS growth / decline trend across reports
-        - Margin expansion / contraction
-        - ROE / ROA trajectory
-        - Debt-to-equity trend
-        - Historical price reactions around earnings
+    This is the CORE of the fundamental analysis engine. It scans all
+    historical financial statements for statistically meaningful trends:
+
+    ┌──────────────────────────────────────────────────────────────┐
+    │ Trend Check         │ What It Looks For       │ Threshold    │
+    ├──────────────────────────────────────────────────────────────┤
+    │ 1. EPS Trend        │ First vs last EPS       │ Any change   │
+    │ 2. ROE Trajectory   │ ROE across reports      │ ±2% change   │
+    │ 3. Margin Direction │ Gross margin trend      │ ±2% change   │
+    │ 4. Leverage Change  │ Debt-to-equity trend    │ ±0.3 change  │
+    │ 5. Post-Earnings    │ Average price return    │ ±3% return   │
+    │    History           │ after past reports      │              │
+    └──────────────────────────────────────────────────────────────┘
+
+    Each trend that triggers becomes a "KeyDriver" — a piece of evidence
+    that counts toward the final BUY/SELL/HOLD signal. Positive drivers
+    add +1 to the net score; negative drivers subtract 1.
+
+    Args:
+        enriched: List of financial records with yfinance price reactions.
+        timeframe: Prediction horizon (not directly used here but available).
+
+    Returns:
+        List of KeyDriver objects, each explaining one trend found.
     """
     drivers: list[KeyDriver] = []
 
     if len(enriched) < 2:
         return drivers
 
-    # EPS trend
+    # ── 1. EPS TREND ───────────────────────────────────────────
+    # Compare the first and last EPS values in the history.
+    # Growing EPS = company is becoming more profitable per share.
     eps_values = [r.get("eps") for r in enriched if r.get("eps") is not None]
     if len(eps_values) >= 2:
-        eps_change = eps_values[-1] - eps_values[0]
+        eps_change = eps_values[-1] - eps_values[0]   # last minus first
         if eps_change > 0:
             drivers.append(KeyDriver(
                 factor="EPS Growth",
@@ -627,7 +659,10 @@ def _compute_key_drivers(
                 detail=f"EPS fell from ${eps_values[0]:.2f} to ${eps_values[-1]:.2f}.",
             ))
 
-    # ROE trend
+    # ── 2. ROE TRAJECTORY ──────────────────────────────────────
+    # ROE = Return on Equity = Net Income / Shareholder Equity.
+    # Measures how efficiently the company uses investor money.
+    # Threshold: ±2 percentage points (e.g., 15% → 17% triggers "improvement").
     roe_values = [r.get("roe") for r in enriched if r.get("roe") is not None]
     if len(roe_values) >= 2:
         roe_trend = roe_values[-1] - roe_values[0]
@@ -644,7 +679,9 @@ def _compute_key_drivers(
                 detail=f"ROE declined by {abs(roe_trend):.1%}.",
             ))
 
-    # Margin trend (use gross margin)
+    # ── 3. MARGIN DIRECTION ────────────────────────────────────
+    # Gross margin = (Revenue - COGS) / Revenue.
+    # Expanding margins = company has pricing power or cost efficiency.
     margin_values = [r.get("gross_margin") for r in enriched if r.get("gross_margin") is not None]
     if len(margin_values) >= 2:
         margin_trend = margin_values[-1] - margin_values[0]
@@ -661,7 +698,10 @@ def _compute_key_drivers(
                 detail=f"Gross margin contracted by {abs(margin_trend):.1%}.",
             ))
 
-    # Debt-to-equity trend
+    # ── 4. LEVERAGE CHANGE ─────────────────────────────────────
+    # Debt-to-equity = Total Liabilities / Shareholder Equity.
+    # Rising D/E = company is taking on more debt (riskier).
+    # Falling D/E = company is paying down debt (safer).
     dte_values = [r.get("debt_to_equity") for r in enriched if r.get("debt_to_equity") is not None]
     if len(dte_values) >= 2:
         dte_trend = dte_values[-1] - dte_values[0]
@@ -678,7 +718,10 @@ def _compute_key_drivers(
                 detail=f"Debt-to-equity decreased by {abs(dte_trend):.2f}.",
             ))
 
-    # Historical price reaction
+    # ── 5. POST-EARNINGS PRICE HISTORY ─────────────────────────
+    # Average stock price return after past earnings reports.
+    # If the stock historically rallies after earnings → bullish signal.
+    # If it historically drops → bearish signal.
     price_returns = [
         r.get("price_return") for r in enriched
         if r.get("price_return") is not None
@@ -707,30 +750,46 @@ def _compute_technical_alignment(
     timeframe: str,
 ) -> KeyDriver | None:
     """
-    Fetch recent price momentum (daily/weekly OHLCV) via yfinance and
-    check whether technical price action aligns with or contradicts the
-    fundamental signal direction.
+    THE 6TH TREND CHECK — compares fundamental direction with actual
+    price momentum from Yahoo Finance.
 
-    Logic:
-        - Compute preliminary fundamental direction from existing drivers.
-        - Fetch 20-day daily momentum + 4-week weekly momentum.
-        - If daily AND weekly trends agree with fundamentals → alignment bonus.
-        - If both contradict fundamentals → contradiction penalty.
-        - Mixed signals → no driver added (neutral).
+    This is the bridge between fundamental analysis (what the company's
+    numbers say) and technical analysis (what the market is actually doing).
+
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ LOGIC:                                                          │
+    │                                                                  │
+    │ 1. Determine fundamental direction from existing 5 drivers:      │
+    │    positive > negative → "bullish"                                │
+    │    negative > positive → "bearish"                                │
+    │    equal → "neutral"                                              │
+    │                                                                  │
+    │ 2. Fetch 20-day daily + 4-week weekly OHLCV momentum from        │
+    │    Yahoo Finance (via YFinanceFetcher.get_price_momentum)        │
+    │                                                                  │
+    │ 3. Determine technical direction:                                │
+    │    daily_trend = bullish if price ↑ > 2% in 20 days              │
+    │    weekly_trend = bullish if price ↑ > 3% in 4 weeks             │
+    │    Combined: daily + weekly scores → bullish/bearish              │
+    │                                                                  │
+    │ 4. Compare:                                                       │
+    │    Fundamentals + Technical agree → ALIGNMENT (+10% confidence)   │
+    │    Fundamentals + Technical disagree → CONTRADICTION (-10%)       │
+    │    Mixed/insufficient → no driver added                           │
+    └─────────────────────────────────────────────────────────────────┘
 
     Args:
-        ticker: Stock symbol.
+        ticker: Stock symbol to fetch momentum for.
         drivers: Fundamental key drivers (used to determine direction).
-        timeframe: Prediction horizon (1m, 3m, 6m, 1y).
+        timeframe: Prediction horizon.
 
     Returns:
-        A KeyDriver if a clear alignment or contradiction is detected,
-        otherwise None.
+        A KeyDriver if alignment/contradiction is detected, else None.
     """
     if not drivers:
         return None
 
-    # Determine fundamental direction from existing drivers
+    # ── Step 1: Determine fundamental direction ──
     positive = sum(1 for d in drivers if d.impact == "positive")
     negative = sum(1 for d in drivers if d.impact == "negative")
     net_score = positive - negative
@@ -742,7 +801,7 @@ def _compute_technical_alignment(
     else:
         fundamental_direction = "bearish"
 
-    # Fetch momentum data
+    # ── Step 2: Fetch price momentum data ──
     try:
         momentum = fetcher.get_price_momentum(ticker)
     except Exception:
@@ -759,7 +818,9 @@ def _compute_technical_alignment(
     weekly_momentum = momentum.get("weekly_momentum_pct")
     green_ratio = momentum.get("green_candle_ratio")
 
-    # Build a combined technical direction
+    # ── Step 3: Build combined technical direction ──
+    # Each trend votes: +1 for bullish, -1 for bearish.
+    # Combined score ranges from -2 (both bearish) to +2 (both bullish).
     technical_signals = []
     if daily_trend == "bullish":
         technical_signals.append(1)
@@ -774,18 +835,17 @@ def _compute_technical_alignment(
     if not technical_signals:
         return None
 
-    # Combined technical score (-2 to +2)
-    tech_score = sum(technical_signals)
+    tech_score = sum(technical_signals)  # -2 to +2
 
-    # Determine technical direction
+    # Determine dominant technical direction
     if tech_score >= 1:
         technical_direction = "bullish"
     elif tech_score <= -1:
         technical_direction = "bearish"
     else:
-        return None  # Mixed signals, no driver
+        return None  # Mixed signals (e.g., daily bullish but weekly bearish)
 
-    # ── Build detail string ──
+    # ── Build human-readable detail string ──
     detail_parts = []
     if daily_momentum is not None:
         detail_parts.append(f"Daily ({momentum['data_points']}d): {daily_momentum:+.2%}")
@@ -795,7 +855,7 @@ def _compute_technical_alignment(
         detail_parts.append(f"Green candles: {green_ratio:.0%}")
     detail = " | ".join(detail_parts)
 
-    # ── Alignment check ──
+    # ── Step 4: Compare fundamentals vs technicals ──
     if fundamental_direction == "neutral":
         # Fundamentals are mixed; technicals provide a directional signal
         if technical_direction == "bullish":
@@ -812,7 +872,7 @@ def _compute_technical_alignment(
             )
 
     if fundamental_direction == technical_direction:
-        # Alignment — bonus confidence
+        # ✅ ALIGNMENT: price action confirms what the numbers suggest
         direction_label = "Bullish" if technical_direction == "bullish" else "Bearish"
         impact = "positive" if technical_direction == "bullish" else "negative"
         return KeyDriver(
@@ -821,9 +881,9 @@ def _compute_technical_alignment(
             detail=f"Price momentum confirms fundamental {fundamental_direction} signal. {detail}",
         )
     else:
-        # Contradiction — penalty
+        # ❌ CONTRADICTION: price action disagrees with fundamentals
         direction_label = "Bullish" if technical_direction == "bullish" else "Bearish"
-        # The impact is opposite of fundamentals — this reduces net_score
+        # The impact is OPPOSITE of fundamentals — this reduces net_score
         impact = "negative" if fundamental_direction == "bullish" else "positive"
         return KeyDriver(
             factor=f"Technical Contradiction ({direction_label})",
@@ -840,23 +900,51 @@ def _determine_signal(
     tech_alignment_data: dict[str, Any] | None = None,
 ) -> tuple[str, float | None, float, dict[str, Any]]:
     """
-    Determine the trading signal (buy/hold/sell), predicted return %,
-    confidence score, and a detailed confidence breakdown from the
-    enriched data and key drivers.
+    THE FINAL DECISION — takes all 6 trend checks and produces the
+    trading signal (BUY / HOLD / SELL), predicted return %, and
+    confidence score.
+
+    ┌─────────────────────────────────────────────────────────────┐
+    │ CONFIDENCE FORMULA:                                         │
+    │                                                              │
+    │ base_confidence = 40%  (always starts here)                  │
+    │ driver_bonus     = (number_of_drivers × 10%)                │
+    │ raw_confidence   = 40% + driver_bonus                       │
+    │ final_confidence = min(raw_confidence, 95%)  ← capped       │
+    │                                                              │
+    │ Example: 4 drivers found → 40% + 40% = 80% confidence       │
+    │                                                              │
+    │ SIGNAL RULES:                                                │
+    │                                                              │
+    │ net_score = positive_drivers - negative_drivers              │
+    │                                                              │
+    │ net_score ≥ +2  →  BUY   (strong bullish evidence)          │
+    │ net_score ≤ -2  →  SELL  (strong bearish evidence)          │
+    │ otherwise       →  HOLD  (mixed or insufficient evidence)   │
+    │                                                              │
+    │ PREDICTED RETURN:                                            │
+    │ Uses average historical post-earnings return ± 2%           │
+    │ adjustment based on signal direction.                        │
+    └─────────────────────────────────────────────────────────────┘
 
     Args:
-        enriched: List of enriched financial records with price reactions.
-        drivers: All key drivers (fundamental + technical alignment).
+        enriched: Financial records with price reactions.
+        drivers: All 5-6 KeyDrivers (fundamental + technical alignment).
         current_price: Latest known price.
         trading_days: Trading days for the prediction horizon.
-        tech_alignment_data: Optional technical momentum data for the
-                             confidence breakdown display.
+        tech_alignment_data: Technical momentum data for display.
+
+    Returns:
+        Tuple of (signal_type, predicted_return, confidence_score,
+        confidence_breakdown).
     """
+    # Count drivers by impact type
     positive = sum(1 for d in drivers if d.impact == "positive")
     negative = sum(1 for d in drivers if d.impact == "negative")
     neutral = sum(1 for d in drivers if d.impact == "neutral")
-    total = positive + negative
+    total = positive + negative   # neutral drivers don't count
 
+    # ── Edge case: no drivers found at all ──
     if total == 0:
         return ("hold", 0.0, 0.3, {
             "base_confidence": 0.40,
@@ -870,20 +958,22 @@ def _determine_signal(
             "technical_alignment": tech_alignment_data,
         })
 
-    # Signal based on driver balance
+    # ── Signal from driver balance ──
     net_score = positive - negative
 
-    # Confidence from driver count: base 40% + 10% per driver, capped at 95%
+    # ── Confidence calculation ──
+    # Base 40% + 10% per driver, capped at 95%
+    # (No prediction can ever be 100% certain — the market is unpredictable)
     base_confidence = 0.40
-    driver_bonus = total / 10.0
+    driver_bonus = total / 10.0   # 1 driver = +10%, 2 = +20%, ..., 6 = +60%
     raw_confidence = base_confidence + driver_bonus
-    confidence = round(min(raw_confidence, 0.95), 4)
+    confidence = round(min(raw_confidence, 0.95), 4)  # clamp to 95% max
     cap_applied = raw_confidence > 0.95
 
-    # Build formula explanation
+    # Build a human-readable formula explanation
     formula = f"{base_confidence:.0%} base + ({total} drivers × 10%) = {raw_confidence:.0%}"
     if cap_applied:
-        formula += f" → capped at 95%"
+        formula += " → capped at 95%"
 
     confidence_breakdown = {
         "base_confidence": round(base_confidence, 4),
@@ -899,7 +989,9 @@ def _determine_signal(
         "technical_alignment": tech_alignment_data,
     }
 
-    # Predicted return from historical price reactions
+    # ── Predicted return from historical price reactions ──
+    # Take the average post-earnings return across all reports
+    # and adjust it based on the fundamental signal direction.
     price_returns = [
         r.get("price_return") for r in enriched
         if r.get("price_return") is not None
@@ -910,12 +1002,15 @@ def _determine_signal(
 
     # Blend fundamentals signal with historical return
     if net_score >= 2:
+        # Strong buy: at least +3% or historical average +2%
         predicted_return = round(max(avg_historical_return + 0.02, 0.03), 4)
         signal = "buy"
     elif net_score <= -2:
+        # Strong sell: at most -3% or historical average -2%
         predicted_return = round(min(avg_historical_return - 0.02, -0.03), 4)
         signal = "sell"
     else:
+        # Hold: just use the historical average
         predicted_return = round(avg_historical_return, 4)
         signal = "hold"
 

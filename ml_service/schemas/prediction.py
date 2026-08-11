@@ -1,5 +1,36 @@
 """
 Pydantic schemas for the ML prediction service.
+
+These models define the CONTRACT between Laravel (PHP) and FastAPI (Python).
+Every request and response is validated against these schemas — if a field
+is missing or has the wrong type, FastAPI returns a 422 error automatically.
+
+WHAT IS PYDANTIC?
+    Pydantic is a data validation library for Python.  It's like TypeScript
+    interfaces but for Python.  When you define a class like:
+
+        class HealthResponse(BaseModel):
+            status: str = "ok"
+            model_loaded: bool
+
+    Pydantic automatically:
+    1. Validates that incoming JSON matches these types
+    2. Converts types if possible (e.g., string "123" → int 123)
+    3. Generates JSON Schema for the Swagger /docs UI
+    4. Returns clear error messages for invalid data
+
+SCHEMA HIERARCHY:
+    ┌─────────────────────────────────────────────────────────────┐
+    │ PredictionRequest ──→ PredictionResponse                    │
+    │   features: dict                                           │
+    │   target_period: "1m"|"3m"|"6m"|"1y"                      │
+    │                                                             │
+    │ EnhancedPredictionRequest ──→ EnhancedPredictionResponse    │
+    │   ticker: str                                               │
+    │   timeframe: str                                            │
+    │   current_price: float                                      │
+    │   financial_history: [FinancialRecord, ...]                │
+    └─────────────────────────────────────────────────────────────┘
 """
 
 from __future__ import annotations
@@ -81,8 +112,16 @@ class HealthResponse(BaseModel):
 class FinancialRecord(BaseModel):
     """
     A single financial-statement snapshot sent by Laravel for the enhanced
-    prediction endpoint.  Includes the report date so the Python service
-    can fetch post-earnings price reactions from yfinance.
+    prediction endpoint.
+
+    This is one row from the `financial_statements` database table.
+    Laravel's StockPredictionService builds an array of these (all historical
+    filings for a company, oldest first) and sends them to the Python service.
+
+    Each record contains both raw dollar amounts (revenue, net_income) and
+    pre-computed ratios (gross_margin, roe). The `reported_date` is critical —
+    it lets the Python service look up what the stock price was on that date
+    and how it moved afterward (post-earnings drift).
     """
 
     fiscal_year: int = Field(..., description="Fiscal year of the report.")
@@ -137,9 +176,23 @@ class KeyDriver(BaseModel):
 
 class EnhancedPredictionResponse(BaseModel):
     """
-    Response payload for the enhanced prediction endpoint.
+    Response payload for the enhanced prediction endpoint — what the
+    dashboard displays after clicking "Run Prediction."
 
-    Mirrors the shape expected by the Laravel StockPredictionService.
+    FIELD-BY-FIELD EXPLANATION:
+    ┌─────────────────────┬──────────────────────────────────────────┐
+    │ ticker              │ The stock symbol (e.g., "AAPL")          │
+    │ timeframe           │ Prediction horizon ("1m","3m","6m","1y") │
+    │ signal_type         │ "buy", "hold", or "sell"                 │
+    │ predicted_return    │ Expected % return (e.g., 0.052 = +5.2%)  │
+    │ confidence_score    │ 0.0–1.0 (e.g., 0.75 = 75% confident)    │
+    │ confidence_breakdown│ How the score was calculated (formula,    │
+    │                     │ driver counts, technical alignment)       │
+    │ key_drivers         │ Ranked list of what drove the signal     │
+    │                     │ (EPS Growth, ROE Improvement, etc.)      │
+    │ current_price       │ Latest known price from the database     │
+    │ target_price        │ Projected price at end of timeframe      │
+    └─────────────────────┴──────────────────────────────────────────┘
     """
 
     ticker: str

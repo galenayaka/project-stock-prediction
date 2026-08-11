@@ -13,8 +13,10 @@ A full-stack application that combines **SEC EDGAR financial data**, **Yahoo Fin
 5. [Project Structure](#project-structure)
 6. [Setup & Installation](#setup--installation)
 7. [Code Walkthrough (Learning Guide)](#code-walkthrough-learning-guide)
-8. [API Reference](#api-reference)
-9. [Database Schema](#database-schema)
+8. [UI Design System — Noir & Cyber-Monochrome](#ui-design-system--noir--cyber-monochrome)
+9. [Production Deployment](#production-deployment)
+10. [API Reference](#api-reference)
+11. [Database Schema](#database-schema)
 
 ---
 
@@ -45,11 +47,16 @@ Yahoo Finance ──→ Price history + market data ─────────�
 
 ### Features
 
+- **Bloomberg Terminal Dashboard** — Full-width 3-column layout with Global Markets, Watchlist, and Live News Feed
+- **Noir & Cyber-Monochrome Theme** — Pure black (`#000000`) backgrounds, vermilion-orange accent (`#ff3b00`), neon emerald buy signals (`#00e676`), crimson sell signals (`#ff1744`)
 - **One-click SEC Import** — Pull 10-K/10-Q financials from SEC EDGAR XBRL API
 - **AI Predictions** — XGBoost + RandomForest ensemble on fundamental ratios + technical indicators
 - **Post-Earnings Analysis** — For each historical report, fetches the actual price reaction via Yahoo Finance
-- **Trading Signals** — Returns buy/hold/sell with confidence score and ranked key drivers
-- **Interactive Dashboard** — Dark-themed UI with real-time Alpine.js reactivity + Chart.js
+- **Technical Price Alignment** — Compares fundamental direction with daily/weekly OHLC candle momentum for confidence bonuses/penalties
+- **Trading Signals** — Returns buy/hold/sell with confidence score, breakdown, and ranked key drivers
+- **Live Rankings** — Sortable table of all companies by prediction strength
+- **Interactive Charts** — Chart.js revenue trends + Alpine.js real-time prediction updates
+- **Production-Ready ML Service** — Windows Service / Task Scheduler launchers for persistent background operation
 
 ---
 
@@ -57,12 +64,12 @@ Yahoo Finance ──→ Price history + market data ─────────�
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                    BROWSER (Alpine.js + Tailwind CSS)                 │
-│  ┌─────────────────────┐    ┌──────────────────────────────────────┐ │
-│  │ Import SEC Data Btn  │    │ Run Prediction + Timeframe Select     │ │
-│  └─────────┬───────────┘    └─────────────────┬────────────────────┘ │
-│            │            AJAX (fetch API)       │                       │
-└────────────┼──────────────────────────────────┼───────────────────────┘
+│              BROWSER (Alpine.js + Tailwind CSS CDN + Chart.js)       │
+│  ┌───────────────────┐  ┌──────────────────────────────────────────┐ │
+│  │ Import SEC Data    │  │ Run Prediction + Timeframe Select         │ │
+│  └─────────┬─────────┘  └─────────────────┬────────────────────────┘ │
+│            │          AJAX (fetch API)     │                          │
+└────────────┼──────────────────────────────┼──────────────────────────┘
              │                                   │
     ┌────────▼───────────────────────────────────▼────────┐
     │              LARAVEL 12 (PHP 8.2)                    │
@@ -93,9 +100,9 @@ Yahoo Finance ──→ Price history + market data ─────────�
 
 | Layer | Technology |
 |---|---|
-| Frontend | Blade templates, Alpine.js 3, Tailwind CSS CDN, Chart.js 4 |
+| Frontend | Blade templates, Alpine.js 3, Tailwind CSS CDN (custom `noir`/`accent`/`buy`/`sell`/`mute` palette), Chart.js 4 |
 | Backend | Laravel 12, PHP 8.2 |
-| ML Service | Python 3.11, FastAPI, scikit-learn, XGBoost, yfinance |
+| ML Service | Python 3.11, FastAPI 0.115+, scikit-learn 1.5+, XGBoost 2.1+, yfinance 0.2+ |
 | Database | MySQL 8 |
 | Data Sources | SEC EDGAR (XBRL), Yahoo Finance (via yfinance) |
 
@@ -312,35 +319,37 @@ graph TD
 
 ---
 
-### Flow 5: Frontend Rendering (Alpine.js Dashboard)
+### Flow 5: Frontend Rendering (Bloomberg Terminal Dashboard)
 
-How the Blade template initializes and updates the UI.
+The dashboard uses a **3-column Bloomberg Terminal layout** with full viewport width. Alpine.js handles real-time prediction updates, Chart.js renders revenue/income trends, and Tailwind CSS CDN provides the Noir & Cyber-Monochrome styling.
 
 ```mermaid
 sequenceDiagram
     participant Blade as Blade Template
-    participant Alpine as Alpine.js
+    participant Alpine as Alpine.js (x-data)
     participant ChartJS as Chart.js
     participant API as Laravel API
 
-    Blade->>Alpine: Server-rendered x-data init<br/>{predictionData, statementsData, chartLabels, chartMetrics}
-    Alpine->>Alpine: init(): Parse server data, init chart
-    Alpine->>ChartJS: new Chart(ctx, config)
-    Note over ChartJS: Dual-axis line chart:<br/>Revenue (bar) + Net Income (bar)<br/>EPS (line, right axis)
+    Blade->>Alpine: Server-rendered x-data init<br/>{predictionData, statementsData}
+    Note over Blade: 3-Column Grid (12 cols):<br/>Left (2): Global Markets + Macro<br/>Center (7): Rankings + Watchlist<br/>Right (3): Live News Feed
+
+    Alpine->>Alpine: init(): Parse server data, wire up event handlers
 
     Note over Alpine: User clicks "Run Prediction"
     Alpine->>API: POST /api/v1/companies/{id}/predictions
     API-->>Alpine: Prediction JSON
     Alpine->>Alpine: Update signal badge, confidence gauge, key drivers list
+    Alpine->>ChartJS: renderFeatureChart() — horizontal bar chart
 ```
 
 **File chain:**
 
 | Step | File | Role |
 |------|------|------|
-| 1 | `resources/views/layouts/app.blade.php` | Dark theme layout (zinc-950), Tailwind CDN, Alpine.js CDN, Chart.js CDN |
-| 2 | `resources/views/companies/show.blade.php` | Main dashboard — Alpine.js component with `x-data`, prediction panel, financial table, chart |
-| 3 | `resources/views/companies/index.blade.php` | Company listing with sector filter, search, pagination |
+| 1 | `resources/views/layouts/app.blade.php` | Full-width noir layout, custom Tailwind palette (`noir`, `accent`, `buy`, `sell`, `mute`), live clock, Rankings nav link |
+| 2 | `resources/views/companies/index.blade.php` | **Bloomberg Terminal 3-column dashboard** — Global Markets (left), Watchlist + Rankings (center), Live News Feed (right) |
+| 3 | `resources/views/companies/show.blade.php` | Company detail — prediction panel, financial statements table, revenue/income Chart.js, confidence breakdown accordion |
+| 4 | `resources/views/companies/rankings.blade.php` | Full ranking table with sortable signals, confidence bars, legend badges |
 
 ---
 
@@ -350,16 +359,17 @@ sequenceDiagram
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           BROWSER                                        │
 │  resources/views/                                                        │
-│  ├── layouts/app.blade.php          (dark theme shell)                   │
+│  ├── layouts/app.blade.php          (full-width noir terminal shell)     │
 │  └── companies/                                                          │
-│      ├── index.blade.php            (company listing + search)           │
-│      └── show.blade.php             (Alpine.js dashboard + Chart.js)     │
+│      ├── index.blade.php            (3-col Bloomberg dashboard)          │
+│      ├── show.blade.php             (Alpine.js prediction + Chart.js)    │
+│      └── rankings.blade.php         (sortable prediction strength table) │
 └────────────────────────────────┬────────────────────────────────────────┘
                                  │ AJAX (fetch)
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                       LARAVEL 12 ROUTING                                 │
-│  routes/web.php                   (6 Blade routes)                       │
+│  routes/web.php                   (7 Blade routes)                       │
 │  routes/api.php                   (10 JSON API routes)                   │
 └────────────────────────────────┬────────────────────────────────────────┘
                                  │
@@ -427,13 +437,89 @@ sequenceDiagram
 
 ## How the AI Model Works
 
-### Three Prediction Modes
+### What Are XGBoost and RandomForest?
 
-The Python ML service supports three distinct prediction approaches:
+| Model | What It Is | How It Works |
+|-------|-----------|--------------|
+| **XGBoost** (eXtreme Gradient Boosting) | A gradient-boosted decision tree algorithm | Builds trees **sequentially** — each new tree focuses on correcting the prediction errors of the previous trees. It uses gradient descent to minimize loss (error) at each step. XGBoost is known for speed and winning Kaggle competitions. |
+| **RandomForest** | An ensemble of many independent decision trees | Builds hundreds of trees **in parallel**, each trained on a random subset of data rows and features (bagging). The final prediction is the **average** of all trees. This reduces overfitting and variance. |
+
+**Why use both?** They complement each other. XGBoost is strong at capturing complex nonlinear patterns (sequential boosting). RandomForest is stable and resistant to overfitting (parallel bagging). Averaging them together — called **ensemble averaging** — gives a more robust prediction than either alone.
+
+### Where Are They Actually Used?
+
+The ML ensemble is used in **one specific workflow**: price forecasting via the `/api/v1/train` endpoint.
+
+```
+POST /api/v1/train
+────────────────────────────────────────────────────────────────
+ 1. Fetch 5 years of AAPL daily OHLCV data from Yahoo Finance
+ 2. Engineer 12 technical features (moving averages, volatility, returns...)
+ 3. Target = closing price 60 trading days in the future
+ 4. Split: 80% training, 20% testing (chronological — no shuffle!)
+ 5. Scale features with StandardScaler
+ 6. Fit XGBoost (100 trees, depth 6)  ─┐
+ 7. Fit RandomForest (100 trees, depth 8) ─┤  ← THE ML TRAINING
+ 8. Evaluate: MAE, RMSE, R² on test set
+                                            │
+ 9. predict_price(): ensemble = (XGBoost + RandomForest) / 2.0
+```
+
+**Model hyperparameters** (in `ml_service/models/predictor.py`):
+
+```python
+self.xgb_model = xgb.XGBRegressor(
+    n_estimators=100,      # 100 boosting rounds
+    max_depth=6,           # trees can go 6 levels deep
+    learning_rate=0.1,     # step size per boosting round
+    random_state=42,       # reproducible results
+)
+
+self.rf_model = RandomForestRegressor(
+    n_estimators=100,      # 100 decision trees
+    max_depth=8,           # each tree up to 8 levels deep
+    random_state=42,       # reproducible results
+)
+```
+
+### What the Main Dashboard ("Run Prediction") Actually Uses
+
+This is important — the **"Run Prediction" button on the dashboard does NOT use XGBoost or RandomForest**. Instead, it uses the **Enhanced Fundamental Analysis** mode (`POST /api/v1/predict/enhanced`):
+
+```
+"Run Prediction" Button (show.blade.php)
+─────────────────────────────────────────────
+  ↓ POST /api/v1/predict/enhanced
+  ↓
+6 Trend Checks (rule-based heuristic, NOT ML):
+ ┌────────────────────────────────────────────────┐
+ │ 1. EPS Trend      — growing or declining?       │
+ │ 2. ROE Trajectory  — improving or deteriorating? │
+ │ 3. Margin Direction — expanding or contracting?  │
+ │ 4. Leverage Change  — debt rising or falling?    │
+ │ 5. Post-Earnings History — past price reactions  │
+ │ 6. Technical Alignment — OHLC candles vs fundamentals │
+ └────────────────────────────────────────────────┘
+  ↓
+ net_score = positive_drivers - negative_drivers
+  ↓
+ net_score ≥ +2 → BUY   │  net_score ≤ -2 → SELL   │  otherwise → HOLD
+ confidence = 40% base + (drivers × 10%), capped at 95%
+```
+
+**Why not use ML for "Run Prediction"?** Because the ML ensemble is trained on OHLCV **price patterns** (technical mode), not on fundamental→price relationships. Training a model that maps P/E ratios, ROE, margins, etc. directly to future prices requires labeled historical data where each fundamental snapshot is paired with the subsequent price outcome — that labeled dataset doesn't exist yet for this project. The 6-trend heuristic is **transparent and interpretable** — you can see exactly *why* the AI made its BUY/SELL decision, unlike a black-box neural network.
+
+### Three Prediction Modes — Summary
+
+| Mode | Endpoint | Uses ML? | Purpose |
+|------|----------|----------|---------|
+| **Fundamental (Heuristic)** | `/api/v1/predict` | ❌ No | Weighted sum of 11 financial ratios → price estimate |
+| **Enhanced (Dashboard)** | `/api/v1/predict/enhanced` | ❌ No | 6 trend checks from financial history + technical alignment → BUY/SELL/HOLD |
+| **Technical / Price-Forecast** | `/api/v1/train` + `predict_price()` | ✅ **XGBoost + RandomForest** | Train ensemble on OHLCV patterns → predict future close price |
 
 ---
 
-#### Mode 1: Fundamental Analysis (Heuristic)
+### Mode 1 Details: Fundamental (Heuristic)
 
 **Endpoint:** `POST /api/v1/predict`
 
@@ -467,7 +553,7 @@ Direction = bullish if predicted > current × 1.05, bearish if < current × 0.95
 
 ---
 
-#### Mode 2: Enhanced Prediction (with Post-Earnings Analysis)
+### Mode 2 Details: Enhanced Prediction (Dashboard)
 
 **Endpoint:** `POST /api/v1/predict/enhanced`
 
@@ -507,11 +593,18 @@ Step 3: Analyze historical price reactions
 
 Step 4: Generate key drivers (ranked)
 ┌─────────────────────────────────────────────────────────┐
+│ 5 Fundamental Drivers from SEC EDGAR + Yahoo Finance:    │
 │ 1. EPS Growth (positive) — strong earnings trend         │
 │ 2. ROE Improvement (positive) — efficiency gains         │
 │ 3. Margin Expansion (positive) — pricing power           │
 │ 4. Rising Leverage (negative) — more debt than before    │
-│ 5. Post-Earnings History — avg return +2.3%              │
+│ 5. Post-Earnings History — avg return ±X%                │
+│                                                          │
+│ +1 Technical Alignment Driver from local OHLC data:      │
+│ 6. Technical Price Alignment — does daily/weekly         │
+│    candle momentum confirm or contradict fundamentals?   │
+│    Alignment → +10% confidence bonus                     │
+│    Contradiction → −10% confidence penalty               │
 └─────────────────────────────────────────────────────────┘
 
 Step 5: Determine signal and confidence
@@ -529,7 +622,7 @@ Step 5: Determine signal and confidence
 
 ---
 
-#### Mode 3: Technical / Price-Forecast (ML Ensemble)
+### Mode 3 Details: Technical / Price-Forecast (ML Ensemble) ✅ Uses XGBoost + RandomForest
 
 **Endpoint:** `POST /api/v1/train`
 
@@ -538,19 +631,56 @@ Trains the XGBoost + RandomForest ensemble on a ticker's price history.
 **Pipeline:**
 
 ```
-1. Fetch OHLCV data from yfinance (e.g., 5 years daily)
-2. Engineer technical features:
-   · returns_5d, returns_20d  (price returns)
-   · volatility_20d            (rolling std dev)
-   · volume_ratio              (current vs 20d avg volume)
-   · sma_20, sma_50            (simple moving averages)
-   · price_to_sma20            (price relative to 20d SMA)
-3. Create target: closing price N days in the future
-4. Chronological train/test split (no shuffle — time series!)
-5. Scale features with StandardScaler
-6. Train XGBoost (100 trees, depth 6) + RandomForest (100 trees, depth 8)
-7. Ensemble = average of both models
-8. Evaluate: MAE, RMSE, R² on test set
+POST /api/v1/train  {ticker: "AAPL", period: "5y", target_days_ahead: 60}
+│
+├─ main.py: train_model()
+│
+├─ YFinanceFetcher.get_training_data(ticker, period, target_days_ahead)
+│   └─ Fetch 5 years of daily OHLCV from Yahoo Finance via yfinance
+│   └─ Engineer 12 technical features (moving averages, volatility, returns)
+│   └─ Create target: close price 60 days later
+│
+└─ StockPredictor.train_on_price_history(df, test_size=0.2)  ← THE ML HAPPENS HERE
+    │
+    ├─ Chronological split: 80% train, 20% test (no shuffle — time series!)
+    ├─ StandardScaler: normalize all features to μ=0, σ=1
+    │
+    ├─ 🔵 XGBoost.fit(X_train, y_train)     ← 100 trees, depth 6, lr=0.1
+    ├─ 🟢 RandomForest.fit(X_train, y_train) ← 100 trees, depth 8
+    │
+    ├─ xgb_preds  = XGBoost.predict(X_test)
+    ├─ rf_preds   = RandomForest.predict(X_test)
+    ├─ ensemble   = (xgb_preds + rf_preds) / 2.0  ← average both models
+    │
+    └─ Evaluate: MAE, RMSE, R² on test set → {"mae": 5.23, "rmse": 7.89, "r2": 0.85}
+```
+
+**Code location** (`ml_service/models/predictor.py`, lines 134–200):
+
+```python
+def train_on_price_history(self, df, test_size=0.2):
+    X = df[feature_cols].values       # 12 technical features
+    y = df["target_close"].values      # price 60 days ahead
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, shuffle=False  # time-series order
+    )
+
+    X_train_scaled = self.scaler.fit_transform(X_train)
+    X_test_scaled  = self.scaler.transform(X_test)
+
+    self.xgb_model.fit(X_train_scaled, y_train)   # 🔵 Train XGBoost
+    self.rf_model.fit(X_train_scaled, y_train)     # 🟢 Train RandomForest
+
+    xgb_preds = self.xgb_model.predict(X_test_scaled)
+    rf_preds  = self.rf_model.predict(X_test_scaled)
+    ensemble_preds = (xgb_preds + rf_preds) / 2.0  # Average ensemble
+
+    mae  = mean_absolute_error(y_test, ensemble_preds)
+    rmse = sqrt(mean((y_test - ensemble_preds)^2))
+    r2   = r2_score(y_test, ensemble_preds)
+
+    return {"mae": mae, "rmse": rmse, "r2": r2}
 ```
 
 ---
@@ -588,11 +718,15 @@ project-stock-prediction/
 │       └── StockPredictionService.php   # AI service (enhanced mode)
 │
 ├── ml_service/                          # Python FastAPI ML microservice
-│   ├── main.py                          # 7 endpoints on port 8001
+│   ├── main.py                          # 7 endpoints on port 8001 (dev with reload)
+│   ├── run_prod.py                      # Production launcher (no reload)
 │   ├── requirements.txt                 # Python dependencies
 │   ├── models/predictor.py              # StockPredictor (XGBoost + RF)
 │   ├── schemas/prediction.py            # Pydantic request/response models
 │   └── services/data_fetcher.py         # YFinanceFetcher (yfinance)
+│
+├── start_ml_service.bat                 # Windows batch launcher for demo deployment
+├── start_ml_service.vbs                 # Silent background launcher (no console window)
 │
 ├── database/
 │   ├── migrations/                      # 8 migration files
@@ -600,10 +734,14 @@ project-stock-prediction/
 │   └── seeders/DatabaseSeeder.php       # 26 real companies + test user
 │
 ├── resources/views/
-│   ├── layouts/app.blade.php            # Dark theme (zinc-950) layout
+│   ├── layouts/app.blade.php            # Full-width noir terminal layout + custom Tailwind palette
 │   └── companies/
-│       ├── index.blade.php              # Company listing + search + filter
-│       └── show.blade.php               # Alpine.js prediction dashboard
+│       ├── index.blade.php              # Bloomberg Terminal 3-col dashboard
+│       ├── show.blade.php               # Alpine.js prediction + financials + Chart.js
+│       └── rankings.blade.php           # Full ranking table with signal badges
+│
+├── resources/css/
+│   └── app.css                          # Noir scrollbar styling, dialog backdrop
 │
 ├── routes/
 │   ├── web.php                          # 6 web routes (Blade views)
@@ -646,8 +784,13 @@ cd ml_service
 pip install -r requirements.txt
 
 # 5. Start Python ML service (keep this terminal open)
+cd ml_service
 python main.py
-# → http://0.0.0.0:8001
+# → http://0.0.0.0:8001  (development mode with hot-reload)
+
+# For production / demo deployment, use:
+python run_prod.py
+# Or double-click start_ml_service.vbs to run silently in background
 
 # 6. Open in browser (XAMPP)
 # → http://localhost/project-stock-prediction/public/companies
@@ -706,7 +849,49 @@ python main.py
 - `get_training_data(ticker)` — Builds supervised DataFrame with technical features
 - `get_stock_info(ticker)` — Structured metadata (sector, market cap, PE, etc.)
 
-### Part 5: Frontend (Alpine.js)
+### Part 5: Frontend (Bloomberg Terminal UI)
+
+**`resources/views/layouts/app.blade.php`** — Full-width Noir & Cyber-Monochrome layout:
+- Custom Tailwind CDN color palette: `noir` (blacks #000000→#333333), `accent` (vermilion #ff3b00), `buy` (neon emerald #00e676), `sell` (crimson #ff1744), `mute` (silver #a1a1aa)
+- Slim 48px nav bar with live clock, Dashboard/Rankings links, pulsing LIVE indicator
+- Full viewport width (`w-full px-4`) — zero dead horizontal margins
+- Compact monospace flash messages
+
+**`resources/views/companies/index.blade.php`** — Bloomberg Terminal 3-column dashboard:
+
+```
+┌──────────────┬──────────────────────────────┬──────────────┐
+│  LEFT (2/12) │    CENTER (7/12)             │ RIGHT (3/12) │
+│              │                              │              │
+│ Global Mkts  │ Compact Header Bar           │ LIVE NEWS    │
+│ ──────────── │ ├─ Search + Sector Filter    │ ──────────── │
+│ XAUUSD 2.9K  │ └─ [+ Add] CTA (vermilion)   │ 14:22 [GEO]  │
+│ CL=F   76.4  │                              │ China stim.. │
+│ SPX   5,834  │ Strong Buy │ Strong Sell     │ ── Reuters   │
+│ DXY  104.87  │ Rank 1-5   │ Rank 1-5        │              │
+│ BTC   87.4K  │ compact    │ compact         │ ...15 items  │
+│              │            │                 │              │
+│ Macro Ind.   │ Company Cards (3-col grid)   │              │
+│ ──────────── │ ┌────┐┌────┐┌────┐          │              │
+│ Fed Rate     │ │AAPL││TSLA││MSFT│          │              │
+│ CPI YoY      │ └────┘└────┘└────┘          │              │
+└──────────────┴──────────────────────────────┴──────────────┘
+```
+
+Key design choices:
+- `text-[10px]`/`text-[11px]` for terminal-level data density
+- `font-mono` on all tickers, prices, percentages, timestamps
+- Sharp `border-noir-400` panels (no rounded corners — terminal aesthetic)
+- `h-[calc(100vh-5rem)]` fills viewport; each column independently scrollable
+- Left panel: 8 live market instruments + 7 macro indicators with ▲/▼ trend badges
+- Right panel: 15 mock news items with timestamp, category badge, impact tag, source
+- Vermilion accent (`#ff3b00`) for primary CTA buttons and nav highlights
+- Signal badges inline on company cards (BUY/SELL/HOLD)
+
+**`resources/views/companies/rankings.blade.php`** — Full sortable ranking table:
+- All companies ranked by prediction strength (BUY first, then HOLD, SELL, unpredicted)
+- Color-coded confidence bars with percentage labels
+- Summary stat cards (BUY/HOLD/SELL/No Data counts)
 
 **`resources/views/companies/show.blade.php`** — The prediction dashboard:
 
@@ -715,6 +900,81 @@ python main.py
 - `runPrediction()` — fetch → "Running AI Model..." → swap empty state → signal card
 - UI states: empty ("No actionable prediction") ↔ results (signal badge, return %, drivers chart)
 - `Js::from()` used for embedding PHP data in `x-data` attribute (handles `"` escaping)
+- Confidence Breakdown accordion — formula, score bars, driver scorecard, 6 trend checks, technical alignment panel
+- Chart.js: `renderFeatureChart()` horizontal bar + revenue/income dual-line trend chart
+
+---
+
+## UI Design System — Noir & Cyber-Monochrome
+
+The application uses a custom Tailwind CSS color palette designed for high-contrast, high-density financial terminal displays.
+
+### Color Palette
+
+| Token | Hex | Usage |
+|-------|-----|-------|
+| `noir-950` | `#000000` | Body background (pure black) |
+| `noir-800` | `#0d0d0d` | Card / panel backgrounds |
+| `noir-700` | `#121212` | Elevated surfaces |
+| `noir-600` | `#1a1a1a` | Hover states, secondary surfaces |
+| `noir-500` | `#1f1f1f` | Standard borders |
+| `noir-400` | `#262626` | Strong borders, inputs |
+| `accent` | `#ff3b00` | Primary CTAs, nav highlights, logo |
+| `buy` | `#00e676` | Bullish signals, BUY badges, positive returns |
+| `sell` | `#ff1744` | Bearish signals, SELL badges, negative returns |
+| `mute` | `#a1a1aa` | Primary muted text |
+| `mute-dim` | `#8e8e93` | Secondary muted text, placeholders |
+
+### Typography
+
+- **Font**: Inter (sans-serif) via bunny.net CDN
+- **Sizes**: `text-[10px]` / `text-[11px]` for labels and indicators (terminal density), `text-xs` for content, `text-sm` for headings
+- **Monospace**: `font-mono` applied to ticker symbols, prices, percentages, timestamps, form inputs
+- **Tracking**: `tracking-[0.15em]` on uppercase section titles
+
+### Border & Shape Convention
+
+- No rounded corners (`rounded-none`) on all panels for authentic terminal feel
+- `border border-noir-400` on all cards, panels, inputs, and tables
+- `border-noir-500` for subtle internal dividers
+- `hover:border-noir-300` for interactive card hover states
+
+---
+
+## Production Deployment
+
+### ML Service Auto-Start
+
+For demo/production deployments where the Python ML service must run persistently:
+
+**Option 1 — Windows Startup Folder:**
+1. Press `Win+R`, type `shell:startup`, Enter
+2. Create shortcut to `start_ml_service.vbs`
+3. Service starts silently on every boot
+
+**Option 2 — Windows Task Scheduler:**
+1. Open Task Scheduler → Create Basic Task
+2. Name: `StockPrediction ML Service`
+3. Trigger: At system startup
+4. Action: Start program → browse to `start_ml_service.vbs`
+5. Check "Run whether user is logged on or not"
+
+**Option 3 — Manual background launch:**
+```bash
+# Production mode (no hot-reload):
+python ml_service/run_prod.py
+
+# Or double-click: start_ml_service.vbs
+```
+
+### Dev vs Production
+
+| Setting | Dev (`main.py`) | Prod (`run_prod.py`) |
+|---------|-----------------|---------------------|
+| Hot-reload | `reload=True` | `reload=False` |
+| Workers | 1 (auto) | 1 (configurable) |
+| Port | 8001 | 8001 |
+| Startup | Terminal window | Background process |
 
 ---
 
@@ -729,8 +989,9 @@ python main.py
 | `POST` | `/api/v1/companies` | — | Create company |
 | `POST` | `/api/v1/companies/{id}/import` | — | Import SEC financial data |
 | `GET` | `/api/v1/companies/{id}/predictions` | — | List predictions |
-| `POST` | `/api/v1/companies/{id}/predictions` | — | **Run prediction** `{timeframe:"3m"}` |
+| `POST` | `/api/v1/companies/{id}/predictions` | — | **Run prediction** `{timeframe:"3m"}` — uses enhanced mode with 6 trend checks |
 | `GET` | `/api/v1/predictions/{id}` | — | Show single prediction |
+| `GET` | `/companies/rankings` | — | Full ranking table (Blade view) |
 | `GET/POST/DELETE` | `/api/v1/watchlist` | Sanctum | User watchlist |
 
 ### Python ML API (Port 8001)
@@ -739,10 +1000,12 @@ python main.py
 |---|---|---|---|
 | `GET` | `/health` | — | `{status, model_loaded}` |
 | `POST` | `/api/v1/predict` | `{features:{...}, target_period}` | `{predicted_price, confidence, direction}` |
-| `POST` | `/api/v1/predict/enhanced` | `{ticker, timeframe, current_price, financial_history}` | `{signal_type, predicted_return, confidence, key_drivers}` |
+| `POST` | `/api/v1/predict/enhanced` | `{ticker, timeframe, current_price, financial_history[]}` | `{signal_type, predicted_return, confidence_score, confidence_breakdown, key_drivers[], target_price}` |
 | `POST` | `/api/v1/data/stock-info` | `{ticker}` | `{name, sector, market_cap, pe, eps, beta}` |
 | `POST` | `/api/v1/data/historical` | `{ticker, period, interval}` | `{data: [{date,open,high,low,close,volume}]}` |
 | `POST` | `/api/v1/train` | `{ticker, period, target_days_ahead}` | `{metrics: {mae, rmse, r2}}` |
+
+> **Enhanced prediction response** includes a `confidence_breakdown` object with `base_confidence`, `driver_bonus`, `total_drivers`, `net_score`, and a `technical_alignment` sub-object containing daily/weekly momentum data, green candle ratio, and the alignment result (aligned/contradiction/insufficient_data). The `key_drivers` array may include a 6th "Technical Alignment/Contradiction" driver.
 
 ---
 

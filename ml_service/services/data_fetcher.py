@@ -1,11 +1,29 @@
 """
 Yahoo Finance data fetcher using the yfinance library.
 
+This module is the bridge between the ML prediction engine and real-world
+stock market data. It wraps the yfinance Python library (which itself wraps
+the Yahoo Finance API) into structured dataclasses that the predictor can
+consume directly.
+
+WHAT yfinance DOES:
+    yfinance downloads stock data from Yahoo Finance without needing an API
+    key.  It can fetch:
+    - Historical OHLCV prices (Open, High, Low, Close, Volume)
+    - Company metadata (sector, market cap, P/E ratio, beta)
+    - Financial statements (income, balance sheet, cash flow)
+    - Dividend and split history
+
+DATA FLOW:
+    Yahoo Finance API → yfinance (Python library) → YFinanceFetcher
+    → structured dataclasses → StockPredictor
+
 Provides:
 - Historical OHLCV price data for any ticker
 - Financial statement metrics (income, balance sheet, cash flow)
 - Derived financial ratios needed by the prediction model
 - Stock metadata (sector, market cap, etc.)
+- Price momentum calculations for technical alignment
 """
 
 from __future__ import annotations
@@ -185,6 +203,9 @@ class YFinanceFetcher:
                 return 0.0
 
         # ── Balance-sheet derived ratios ──
+        # These are computed from raw Yahoo Finance fields:
+        # Debt-to-Equity = Total Debt / Total Equity
+        # Current Ratio  = Current Assets / Current Liabilities
         total_debt = _safe("totalDebt")
         total_equity = _safe("totalStockholderEquity") or _safe("shareholdersEquity") or 1.0
         debt_to_equity = round(total_debt / total_equity, 6) if total_equity else 0.0
@@ -194,12 +215,19 @@ class YFinanceFetcher:
         current_ratio = round(total_current_assets / total_current_liabilities, 4) if total_current_liabilities else 0.0
 
         # ── Cash flow ──
+        # Free Cash Flow = Operating Cash Flow - Capital Expenditures
+        # This is "real" cash the company generates after investments.
         free_cash_flow = _safe("freeCashflow")
 
-        # ── Profitability ──
-        gross_margin = _safe("grossMargins")  # already a ratio
+        # ── Profitability ratios ──
+        # These come from Yahoo Finance as pre-computed ratios (0.0-1.0 range).
+        # grossMargins: (Revenue - Cost of Goods Sold) / Revenue
+        # operatingMargins: Operating Income / Revenue
+        # returnOnEquity: Net Income / Shareholder Equity (can exceed 1.0!)
+        # returnOnAssets: Net Income / Total Assets
+        gross_margin = _safe("grossMargins")
         operating_margin = _safe("operatingMargins")
-        roe = _safe("returnOnEquity")         # already a ratio; can be > 1
+        roe = _safe("returnOnEquity")
         roa = _safe("returnOnAssets")
 
         # ── Per-share / valuation ──
@@ -238,20 +266,37 @@ class YFinanceFetcher:
         target_days_ahead: int = 60,
     ) -> pd.DataFrame:
         """
-        Build a training DataFrame with historical prices as the target.
+        Build a training DataFrame for the ML ensemble.
 
-        For each row, computes the future price `target_days_ahead` trading
-        days later as the label.  This can be used to train a supervised
-        regression model.
+        This function fetches raw OHLCV data and ENGINEERS DERIVED FEATURES
+        that capture price patterns the ML models can learn from:
+
+        ┌────────────────────┬─────────────────────────────────────────┐
+        │ Feature            │ What It Captures                        │
+        ├────────────────────┼─────────────────────────────────────────┤
+        │ returns_5d         │ Short-term momentum (5-day % change)    │
+        │ returns_20d        │ Monthly momentum (20-day % change)      │
+        │ volatility_20d     │ Price stability (std dev of returns)    │
+        │ volume_ratio       │ Trading interest (volume vs 20d avg)    │
+        │ sma_20             │ Short-term trendline                    │
+        │ sma_50             │ Medium-term trendline                   │
+        │ price_to_sma20     │ Position relative to trend (>1 = above) │
+        │ target_close       │ THE LABEL: close price N days later     │
+        └────────────────────┴─────────────────────────────────────────┘
+
+        The target (target_close) is created by SHIFTING the close price
+        backward by target_days_ahead.  This turns a time-series forecasting
+        problem into a supervised learning problem: "given today's features,
+        predict the price 60 days from now."
 
         Args:
             ticker: Stock symbol.
-            period: Look-back window for historical data (e.g. '5y').
-            target_days_ahead: How many trading days ahead to predict.
+            period: Look-back window (e.g. '5y' for 5 years of data).
+            target_days_ahead: Trading days ahead to predict (default 60).
 
         Returns:
-            DataFrame with columns: date, open, high, low, close, volume,
-            target_close, plus derived technical features.
+            DataFrame ready for StockPredictor.train_on_price_history().
+            NaN rows (from rolling windows and shifted target) are dropped.
         """
         t = yf.Ticker(ticker)
         df: pd.DataFrame = t.history(period=period)
@@ -259,19 +304,38 @@ class YFinanceFetcher:
         if df.empty:
             raise ValueError(f"No historical data for ticker '{ticker}' (period={period})")
 
-        # Target: close price shifted backward by target_days_ahead
+        # ── Target: what we're trying to predict ──
+        # Shift close price BACKWARD by target_days_ahead.
+        # Row i's target = close price at row (i + target_days_ahead).
+        # .shift(-N) moves values UP by N rows.
         df["target_close"] = df["Close"].shift(-target_days_ahead)
 
-        # Simple technical features
-        df["returns_5d"] = df["Close"].pct_change(5)
-        df["returns_20d"] = df["Close"].pct_change(20)
+        # ── Feature engineering ──
+        # Each of these captures a different aspect of price behavior:
+
+        # Momentum: how much has the price moved recently?
+        df["returns_5d"] = df["Close"].pct_change(5)      # % change over 5 days
+        df["returns_20d"] = df["Close"].pct_change(20)     # % change over 20 days
+
+        # Volatility: how much does the price swing? (risk measure)
+        # .rolling(20).std() = standard deviation over 20-day window
         df["volatility_20d"] = df["Close"].pct_change().rolling(20).std()
+
+        # Volume: is trading activity unusually high or low?
+        # Ratio > 1 = higher volume than usual (more interest)
         df["volume_ratio"] = df["Volume"] / df["Volume"].rolling(20).mean()
-        df["sma_20"] = df["Close"].rolling(20).mean()
-        df["sma_50"] = df["Close"].rolling(50).mean()
+
+        # Moving averages: smooth the price to see the trend
+        df["sma_20"] = df["Close"].rolling(20).mean()     # 1-month trend
+        df["sma_50"] = df["Close"].rolling(50).mean()     # ~quarterly trend
+
+        # Position relative to trend: >1.0 = above 20-day average (uptrend)
         df["price_to_sma20"] = df["Close"] / df["sma_20"]
 
-        # Drop rows with NaN (from rolling windows and shifted target)
+        # ── Clean up ──
+        # Drop rows with NaN values. These come from:
+        # 1. Rolling windows at the start (first 20-50 rows)
+        # 2. The shifted target at the end (last target_days_ahead rows)
         df = df.dropna()
 
         return df
