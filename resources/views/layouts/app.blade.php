@@ -55,23 +55,31 @@
 <body class="h-full bg-noir-950 text-white font-sans antialiased">
 
     <!-- Navigation -->
-    <nav class="border-b border-noir-500 bg-noir-950/80 backdrop-blur-sm sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex items-center justify-between h-16">
-                <div class="flex items-center gap-8">
-                    <a href="{{ route('companies.index') }}" class="flex items-center gap-2 font-semibold text-lg text-white">
-                        <svg class="w-7 h-7 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <nav class="border-b border-noir-400 bg-noir-950/90 backdrop-blur-sm sticky top-0 z-50">
+        <div class="w-full px-4">
+            <div class="flex items-center justify-between h-12">
+                <div class="flex items-center gap-6">
+                    <a href="{{ route('companies.index') }}" class="flex items-center gap-2 font-semibold text-sm text-white tracking-tight">
+                        <svg class="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                 d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                         </svg>
-                        StockPrediction
+                        <span class="hidden sm:inline">STOCKPREDICTION</span>
                     </a>
-                    <div class="hidden sm:flex gap-6">
+                    <div class="hidden sm:flex gap-4 text-xs">
                         <a href="{{ route('companies.index') }}"
-                           class="text-sm {{ request()->routeIs('companies.index') ? 'text-accent' : 'text-mute hover:text-white' }} transition-colors">
-                            Companies
+                           class="uppercase tracking-wider {{ request()->routeIs('companies.index') ? 'text-accent' : 'text-mute-dim hover:text-white' }} transition-colors">
+                            Dashboard
+                        </a>
+                        <a href="{{ route('companies.rankings') }}"
+                           class="uppercase tracking-wider {{ request()->routeIs('companies.rankings') ? 'text-accent' : 'text-mute-dim hover:text-white' }} transition-colors">
+                            Rankings
                         </a>
                     </div>
+                </div>
+                <div class="flex items-center gap-4 text-[10px] font-mono text-mute-dim">
+                    <span class="hidden sm:inline">{{ date('D, d M Y H:i:s') }} WIB</span>
+                    <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-buy animate-pulse"></span> LIVE</span>
                 </div>
             </div>
         </div>
@@ -79,14 +87,14 @@
 
     <!-- Flash Messages -->
     @if (session('success') || session('error'))
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+        <div class="w-full px-4 mt-2">
             @if (session('success'))
-                <div class="bg-buy-muted border border-buy-soft text-[#00e676] px-4 py-3 rounded-lg text-sm">
+                <div class="bg-buy-muted border border-buy-soft text-[#00e676] px-3 py-2 text-xs font-mono">
                     {{ session('success') }}
                 </div>
             @endif
             @if (session('error'))
-                <div class="bg-sell-muted border border-sell-soft text-[#ff1744] px-4 py-3 rounded-lg text-sm">
+                <div class="bg-sell-muted border border-sell-soft text-[#ff1744] px-3 py-2 text-xs font-mono">
                     {{ session('error') }}
                 </div>
             @endif
@@ -94,7 +102,7 @@
     @endif
 
     <!-- Main Content -->
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <main class="w-full px-4 py-3">
         @yield('content')
     </main>
 
