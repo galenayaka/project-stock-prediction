@@ -10,27 +10,27 @@
         'Segoe UI Symbol', 'Noto Color Emoji';
 }
 
-/* Scrollbar styling for dark theme */
+/* Scrollbar styling for noir dark theme */
 ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-    background: #18181b;
+    background: #0d0d0d;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: #3f3f46;
+    background: #262626;
     border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #52525b;
+    background: #333333;
 }
 
 /* Dialog backdrop */
 dialog::backdrop {
-    background: rgba(0, 0, 0, 0.6);
+    background: rgba(0, 0, 0, 0.7);
 }
 
