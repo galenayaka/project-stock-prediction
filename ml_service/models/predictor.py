@@ -8,14 +8,14 @@ of the application. It supports TWO prediction modes:
 
 ┌─────────────────────────────────────────────────────────────────────┐
 │ MODE 1: FUNDAMENTAL (predict from financial ratios)                 │
-│                                                                      │
+│                                                                     │
 │ Input:  11 financial ratios (P/E, EPS, ROE, debt/equity, etc.)      │
 │ Output: predicted_price, confidence_score, direction                │
 │ Method: Weighted heuristic (if model untrained)                     │
 │         OR ensemble prediction (if trained on fundamentals)         │
-│                                                                      │
+│                                                                     │
 │ MODE 2: TECHNICAL / PRICE-FORECAST (train on OHLCV patterns)        │
-│                                                                      │
+│                                                                     │
 │ Input:  OHLCV price history from yfinance                           │
 │ Step 1: Engineer 12 technical features                              │
 │ Step 2: Train XGBoost + RandomForest on price patterns              │
@@ -222,7 +222,7 @@ class StockPredictor:
         │    → Builds 100 trees independently on random subsets        │
         │ 6. Ensemble = (XGBoost + RandomForest) / 2.0                 │
         │ 7. Evaluate: MAE (avg error in $), RMSE (penalizes outliers),│
-        │    R² (1.0 = perfect, 0.0 = useless, negative = worse)      │
+        │    R² (1.0 = perfect, 0.0 = useless, negative = worse)       │
         └──────────────────────────────────────────────────────────────┘
 
         Args:
@@ -316,15 +316,15 @@ class StockPredictor:
         HOW THE WEIGHTED HEURISTIC WORKS:
         ┌────────────────────────────────────────────────────────────┐
         │ predicted_price = 100.0  (base price in dollars)           │
-        │                                                             │
+        │                                                            │
         │ for each of the 11 features:                               │
         │     predicted_price += feature_value × weight              │
-        │                                                             │
-        │ Example:                                                    │
+        │                                                            │
+        │ Example:                                                   │
         │   EPS = 6.10  →  +6.10 × 0.7  = +4.27                      │
         │   PE  = 28.5  →  +28.5 × -0.5 = -14.25                     │
         │   ROE = 0.35  →  +0.35 × 0.6  = +0.21                      │
-        │   ...                                                       │
+        │   ...                                                      │
         │   Total adjustment: +$75 → predicted_price = $175          │
         └────────────────────────────────────────────────────────────┘
 
@@ -420,7 +420,7 @@ class StockPredictor:
             "model": "xgboost_rf_ensemble",
             "version": self.MODEL_VERSION,
         }
-        }
+        
 
     # ── Internal helpers ────────────────────────────────────
 
@@ -432,21 +432,21 @@ class StockPredictor:
         feature has a manually-assigned weight reflecting its typical
         relationship with stock price:
 
-        ┌──────────────────────┬────────┬──────────────────────────────┐
-        │ Feature              │ Weight │ Rationale                    │
-        ├──────────────────────┼────────┼──────────────────────────────┤
-        │ EPS                  │  +0.7  │ Strongest driver — profit    │
-        │ ROE                  │  +0.6  │ Efficiency matters           │
-        │ ROA                  │  +0.5  │ Asset utilization            │
-        │ Free Cash Flow       │  +0.5  │ Real cash, not accounting   │
-        │ Gross Margin         │  +0.4  │ Pricing power indicator      │
-        │ Operating Margin     │  +0.4  │ Operational efficiency       │
-        │ Revenue Growth       │ +0.35  │ Growth trajectory            │
-        │ Current Ratio        │  +0.3  │ Short-term financial health  │
-        │ Market Cap           │ +0.001 │ Already priced in (tiny)     │
-        │ P/E Ratio            │  -0.5  │ High P/E = potentially overvalued │
-        │ Debt-to-Equity       │  -0.4  │ High debt = higher risk       │
-        └──────────────────────┴────────┴──────────────────────────────┘
+        ┌──────────────────────┬────────┬────────────────────────────────────┐
+        │ Feature              │ Weight │ Rationale                          │
+        ├──────────────────────┼────────┼────────────────────────────────────┤
+        │ EPS                  │  +0.7  │ Strongest driver — profit          │
+        │ ROE                  │  +0.6  │ Efficiency matters                 │
+        │ ROA                  │  +0.5  │ Asset utilization                  │
+        │ Free Cash Flow       │  +0.5  │ Real cash, not accounting          │
+        │ Gross Margin         │  +0.4  │ Pricing power indicator            │
+        │ Operating Margin     │  +0.4  │ Operational efficiency             │
+        │ Revenue Growth       │ +0.35  │ Growth trajectory                  │
+        │ Current Ratio        │  +0.3  │ Short-term financial health        │
+        │ Market Cap           │ +0.001 │ Already priced in (tiny)           │
+        │ P/E Ratio            │  -0.5  │ High P/E = potentially overvalued  │
+        │ Debt-to-Equity       │  -0.4  │ High debt = higher risk            │
+        └──────────────────────┴────────┴────────────────────────────────────┘
 
         Formula: predicted_price = $100 + Σ(feature_value × weight)
         """
