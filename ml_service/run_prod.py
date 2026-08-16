@@ -1,16 +1,4 @@
-"""
-Production launcher for the ML Prediction Service.
-
-Copyright (c) 2026 Galen Nayaka Nayottama. All rights reserved.
-
-Usage:
-    python run_prod.py
-
-Differs from ``main.py``:
-    - No hot-reload (``reload=False``)
-    - Single worker (increase ``workers`` if you have multiple CPU cores)
-    - Designed to be run as a Windows Service or via Task Scheduler
-"""
+"""Production launcher: no reload, single worker."""
 
 import uvicorn
 

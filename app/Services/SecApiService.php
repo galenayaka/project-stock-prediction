@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Company;
 use App\Models\FinancialStatement;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -61,10 +62,10 @@ final class SecApiService
     }
 
     /**
-     * Build a base HTTP client preconfigured with User-Agent, timeouts,
-     * and retry logic with exponential backoff for rate-limited responses.
+     * Build an HTTP client preconfigured with User-Agent, timeouts and
+     * exponential backoff for rate-limited responses.
      */
-    private function httpClient(): \Illuminate\Http\Client\PendingRequest
+    private function httpClient(): PendingRequest
     {
         return Http::withHeaders([
             'User-Agent' => $this->userAgent,
@@ -91,10 +92,6 @@ final class SecApiService
 
     /**
      * Fetch company facts (XBRL-tagged financial data) from SEC.
-     *
-     * SEC company facts JSON files can be 2-8 MB for large/mature
-     * companies (decades of 10-K/10-Q filings).  A 120-second timeout
-     * accommodates slower connections while fetching these large payloads.
      *
      * @return array<string, mixed>
      *
@@ -216,9 +213,6 @@ final class SecApiService
 
         $usGaap = $facts['facts']['us-gaap'] ?? [];
 
-        // Map SEC XBRL tags to our financial statement columns.
-        // Multiple tags may map to the same column (different companies
-        // use different tag names for the same concept).
         $metricMappings = [
             // Revenue
             'RevenueFromContractWithCustomerExcludingAssessedTax' => 'revenue',
@@ -286,8 +280,8 @@ final class SecApiService
     }
 
     /**
-     * Convert raw SEC dollar values into proper ratios for columns that
-     * expect ratios (gross_margin, operating_margin, roe, roa, etc.).
+     * Convert raw SEC dollar values into the ratios expected by the
+     * gross_margin, operating_margin, roe and roa columns.
      *
      * @param  array<string, mixed>  $metric
      * @return array<string, mixed>
@@ -329,7 +323,7 @@ final class SecApiService
     }
 
     /**
-     * Import financial data for a given company from SEC into the database.
+     * Import financial data for a company from SEC into the database.
      *
      * @return Collection<int, FinancialStatement>
      *

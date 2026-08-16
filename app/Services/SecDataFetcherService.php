@@ -24,19 +24,15 @@ final class SecDataFetcherService
 
     public function __construct()
     {
-        $this->baseUrl = rtrim((string) config('services.ai.url', 'http://localhost:8001'), '/');
-        $this->apiKey = (string) config('services.ai.api_key', '');
+        $this->baseUrl = rtrim((string) config('services.ml_service.url', 'http://localhost:8001'), '/');
+        $this->apiKey = (string) config('services.ml_service.api_key', '');
     }
 
     /**
-     * Fetch OHLC history for a company and store it in the database.
+     * Fetch OHLC history for a company from the ML service and store it.
      *
-     * Calls the Python ML service's yfinance wrapper to pull historical
-     * price data, then upserts each candle into daily_price_histories.
-     *
-     * @param  Company  $company   The company to fetch data for
-     * @param  string   $timeframe One of: '1W', '1M', '3M', '6M', '1Y', '5Y'
-     * @param  string   $interval  One of: '1d', '1wk', '1mo' (default: '1d')
+     * @param  string  $timeframe  One of: '1W', '1M', '3M', '6M', '1Y', '5Y'
+     * @param  string  $interval  One of: '1d', '1wk', '1mo'
      * @return Collection<int, DailyPriceHistory>
      *
      * @throws ConnectionException|\RuntimeException
@@ -56,7 +52,6 @@ final class SecDataFetcherService
             'interval' => $interval,
         ]);
 
-        // 1. Fetch from Python ML service (yfinance wrapper)
         try {
             $response = Http::withHeaders([
                 'Content-Type' => 'application/json',
@@ -82,10 +77,8 @@ final class SecDataFetcherService
                 );
             }
 
-            /** @var array{candles?: list<array<string, mixed>>} $data */
-            $data = $response->json('data', $response->json());
-
-            $candles = $data['candles'] ?? $data['data'] ?? $data;
+            /** @var list<array<string, mixed>> $candles */
+            $candles = $response->json('data', []);
 
             if (! is_array($candles) || empty($candles)) {
                 Log::warning('SecDataFetcherService: no candles returned', [
@@ -103,22 +96,20 @@ final class SecDataFetcherService
             throw $e;
         }
 
-        // 2. Upsert each candle into daily_price_histories
         $imported = collect();
 
         foreach ($candles as $candle) {
-            $date = $candle['date'] ?? $candle['Date'] ?? null;
-            $open = $candle['open'] ?? $candle['Open'] ?? null;
-            $high = $candle['high'] ?? $candle['High'] ?? null;
-            $low = $candle['low'] ?? $candle['Low'] ?? null;
-            $close = $candle['close'] ?? $candle['Close'] ?? null;
-            $volume = $candle['volume'] ?? $candle['Volume'] ?? null;
+            $date = $candle['date'] ?? null;
+            $open = $candle['open'] ?? null;
+            $high = $candle['high'] ?? null;
+            $low = $candle['low'] ?? null;
+            $close = $candle['close'] ?? null;
+            $volume = $candle['volume'] ?? null;
 
             if (! $date || $close === null) {
                 continue;
             }
 
-            // Compute price_change_pct: ((close - open) / open) * 100
             $priceChangePct = null;
             if ($open !== null && (float) $open > 0) {
                 $priceChangePct = round(((float) $close - (float) $open) / (float) $open * 100, 6);
@@ -142,7 +133,7 @@ final class SecDataFetcherService
             $imported->push($record);
         }
 
-        // 3. Update company's latest_price from the most recent close
+        // Update the company's latest price from the most recent close.
         $latest = $imported->last();
         if ($latest instanceof DailyPriceHistory && $latest->close !== null) {
             $company->update([

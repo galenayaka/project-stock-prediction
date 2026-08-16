@@ -43,7 +43,6 @@ final class TriggerPrediction
             'target_period' => $targetPeriod,
         ]);
 
-        // Dispatch to queue for async processing
         RunPrediction::dispatch($prediction);
 
         return $prediction;

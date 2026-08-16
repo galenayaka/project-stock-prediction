@@ -3,8 +3,6 @@
 use App\Http\Controllers\CompanyController;
 use Illuminate\Support\Facades\Route;
 
-// ─── Web Routes ───────────────────────────────────────────────
-
 Route::get('/', fn () => redirect()->route('companies.index'));
 
 Route::prefix('companies')->name('companies.')->controller(CompanyController::class)->group(function (): void {

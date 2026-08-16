@@ -34,7 +34,6 @@ final class CompanyController extends Controller
             ->whereNotNull('sector')
             ->pluck('sector');
 
-        // ── Rankings: Top 5 overall (strongest signals first) ──
         $topRanked = Company::query()
             ->withLatestPrediction()
             ->get()
@@ -63,14 +62,11 @@ final class CompanyController extends Controller
     }
 
     /**
-     * Full rankings page — all companies ranked by prediction strength.
-     *
-     * BUY signals first (by confidence), then HOLD, then SELL,
-     * then companies with no predictions.
+     * Rank every company by prediction strength: buys first, then holds,
+     * then sells, then companies without predictions.
      */
     public function rankings(): View
     {
-        // Fetch ALL companies with their latest completed prediction data
         $ranked = Company::query()
             ->withLatestPrediction()
             ->orderBy('ticker')
@@ -79,17 +75,14 @@ final class CompanyController extends Controller
                 $signal = $company->latest_signal_type;
                 $confidence = (float) ($company->latest_confidence_score ?? 0);
 
-                // Composite score: BUY=+1, HOLD=0, SELL=-1 multiplier × confidence
                 $directionScore = match ($signal) {
                     'buy' => 1.0,
                     'sell' => -1.0,
                     default => 0.0,
                 };
 
-                // Prioritize companies with predictions over those without
                 $hasPrediction = $signal !== null ? 100.0 : 0.0;
 
-                // Final score: direction × confidence + has-prediction bonus
                 return $hasPrediction + ($directionScore * $confidence);
             })
             ->values();
@@ -112,12 +105,8 @@ final class CompanyController extends Controller
             ->orderBy('fiscal_quarter')
             ->get();
 
-        $chartData = $company->financialStatements()
-            ->orderBy('fiscal_year')
-            ->orderBy('fiscal_quarter')
-            ->get();
+        $chartData = $statements;
 
-        // Build prediction data for Alpine.js initialization
         $latestPrediction = $company->latestPrediction();
         $predictionData = null;
 
@@ -209,11 +198,6 @@ final class CompanyController extends Controller
         }
     }
 
-    // ─── API Methods ───────────────────────────────────────────
-
-    /**
-     * API: List companies.
-     */
     public function apiIndex(Request $request): JsonResponse
     {
         $companies = Company::query()
@@ -250,9 +234,6 @@ final class CompanyController extends Controller
         ]);
     }
 
-    /**
-     * API: Store a new company.
-     */
     public function apiStore(StoreCompanyRequest $request): JsonResponse
     {
         $company = Company::create($request->validated());
@@ -263,11 +244,8 @@ final class CompanyController extends Controller
     }
 
     /**
-     * API: Import SEC financial data for a company.
-     *
-     * Called by the Alpine.js "Import SEC Data" button via AJAX.
-     * Returns the latest financial statements as JSON so the
-     * frontend can refresh the table inline.
+     * Called by the Alpine.js "Import SEC Data" button to refresh the
+     * statements table inline.
      */
     public function apiImportFinancials(Company $company, ImportFinancialData $importer): JsonResponse
     {

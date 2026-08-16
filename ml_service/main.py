@@ -1,122 +1,7 @@
-"""
-FastAPI Microservice for Stock Market Prediction
-================================================
+"""FastAPI microservice that predicts stock prices.
 
-Copyright (c) 2026 Galen Nayaka Nayottama. All rights reserved.
-
-This service provides a REST API that integrates **yfinance** for stock data
-retrieval and an **ML ensemble** (XGBoost + RandomForest) for price prediction.
-
-Architecture Overview
----------------------
-::
-
-    Laravel (PHP)  ──HTTP──▶  FastAPI (Python)  ──yfinance──▶  Yahoo Finance
-         ▲                          │
-         │                          ├── models/predictor.py    (ML ensemble)
-         │                          ├── services/data_fetcher.py (yfinance wrapper)
-         │                          └── schemas/prediction.py   (Pydantic models)
-         │
-         └── Prediction results returned as JSON
-
-Two Prediction Modes
---------------------
-1. **Fundamental mode** — Predict from 11 financial-statement features
-   (PE ratio, EPS, ROE, debt-to-equity, etc.). Uses a weighted heuristic
-   when the ensemble hasn't been trained on fundamental→price data.
-2. **Technical / price-forecast mode** — Train on historical OHLCV prices
-   via ``POST /api/v1/train``, then predict future close prices from
-   derived technical indicators (moving averages, volatility, returns).
-
-Data Source — yfinance
-----------------------
-All stock data comes from **yfinance**, a Python library that wraps the
-Yahoo Finance API. No API key required. The ``YFinanceFetcher`` class
-(in ``services/data_fetcher.py``) normalises responses into structured
-dataclasses consumed by the predictor.
-
-Endpoints
----------
-+--------------------------------------+-----------------------------------------------+
-| Endpoint                             | Purpose                                       |
-+======================================+===============================================+
-| ``GET  /health``                     | Health check (model status, version)           |
-+--------------------------------------+-----------------------------------------------+
-| ``POST /api/v1/predict``             | Predict from manually-provided features        |
-+--------------------------------------+-----------------------------------------------+
-| ``POST /api/v1/predict/from-ticker`` | Fetch features via yfinance, then predict      |
-+--------------------------------------+-----------------------------------------------+
-| ``POST /api/v1/data/stock-info``     | Get stock metadata (sector, market cap, etc.)  |
-+--------------------------------------+-----------------------------------------------+
-| ``POST /api/v1/data/historical``     | Get historical OHLCV prices                    |
-+--------------------------------------+-----------------------------------------------+
-| ``POST /api/v1/data/financial-features`` | Get fundamental features for a ticker      |
-+--------------------------------------+-----------------------------------------------+
-| ``POST /api/v1/train``               | Train the ensemble on a ticker's price history |
-+--------------------------------------+-----------------------------------------------+
-
-Quick Start
------------
-.. code-block:: bash
-
-    cd ml_service
-    pip install -r requirements.txt
-    python main.py
-
-The server starts on **http://0.0.0.0:8001**.  Open
-http://localhost:8001/docs for the interactive Swagger UI.
-
-Example cURL Requests
----------------------
-
-**Health check:**
-::
-
-    curl http://localhost:8001/health
-
-**Get Apple stock info:**
-::
-
-    curl -X POST http://localhost:8001/api/v1/data/stock-info \
-      -H "Content-Type: application/json" \
-      -d '{"ticker": "AAPL"}'
-
-**Get historical prices (last 6 months, weekly):**
-::
-
-    curl -X POST http://localhost:8001/api/v1/data/historical \
-      -H "Content-Type: application/json" \
-      -d '{"ticker": "MSFT", "period": "6mo", "interval": "1wk"}'
-
-**Get financial features + predict in one call:**
-::
-
-    curl -X POST http://localhost:8001/api/v1/predict/from-ticker \
-      -H "Content-Type: application/json" \
-      -d '{"ticker": "TSLA", "target_period": "3m"}'
-
-**Train the model on 5 years of AAPL data:**
-::
-
-    curl -X POST http://localhost:8001/api/v1/train \
-      -H "Content-Type: application/json" \
-      -d '{"ticker": "AAPL", "period": "5y", "target_days_ahead": 60}'
-
-**Predict from manual features:**
-::
-
-    curl -X POST http://localhost:8001/api/v1/predict \
-      -H "Content-Type: application/json" \
-      -d '{
-        "features": {
-          "pe_ratio": 28.5, "debt_to_equity": 1.2, "current_ratio": 1.8,
-          "free_cash_flow": 95000000, "gross_margin": 0.44,
-          "operating_margin": 0.28, "roe": 0.35, "roa": 0.12,
-          "eps": 6.10, "market_cap": 2800000000, "revenue_growth": 0.08,
-          "latest_price": 175.0
-        },
-        "target_period": "3m"
-      }'
+Combines yfinance market data with an XGBoost + RandomForest ensemble.
+Run with ``python main.py``; interactive docs live at http://localhost:8001/docs.
 """
 
 from __future__ import annotations
@@ -142,77 +27,35 @@ from schemas.prediction import (
 )
 from services.data_fetcher import YFinanceFetcher
 
-# ---------------------------------------------------------------------------
-# Logging — writes timestamped messages to stdout so you can monitor requests
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Global singleton instances
-#   - predictor : the ML ensemble (XGBoost + RandomForest)
-#   - fetcher   : wraps yfinance for all stock data retrieval
-#
-# These are created ONCE at import time and reused across every HTTP request.
-# This is called the "singleton pattern" — instead of creating a new model
-# object for each prediction (which would be slow and memory-intensive), we
-# create one instance that stays in memory and handles all requests.
-#
-# IMPORTANT: the predictor is INITIALIZED (XGBoost + RandomForest objects
-# exist) but NOT YET TRAINED. Training only happens when someone calls
-# POST /api/v1/train. Until then, predictions use a weighted heuristic.
-# ---------------------------------------------------------------------------
 predictor = StockPredictor()
 fetcher = YFinanceFetcher()
 
 
-# ---------------------------------------------------------------------------
-# Lifespan — FastAPI's modern replacement for @app.on_event("startup"/"shutdown")
-# ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Application lifecycle handler — runs on startup and shutdown.
-
-    On **startup**: initialises the ML predictor. This creates the
-    XGBoost and RandomForest Python objects in memory, but does NOT
-    train them. Training requires labeled OHLCV data and happens
-    separately via ``POST /api/v1/train``.
-
-    Think of this like opening a toolbox before starting work:
-    the tools (models) are ready, but you haven't used them yet.
-
-    On **shutdown**: logs a message. Python's garbage collector will
-    free the model memory automatically — no manual cleanup needed.
-    """
+    """Initialise the predictor on startup; no explicit teardown is needed."""
     logger.info("Starting ML Prediction Service...")
-    predictor.load_model()   # ← creates XGBRegressor + RandomForestRegressor objects
-    yield                     # ← the app runs while we're "inside" this context
+    predictor.load_model()
+    yield
     logger.info("Shutting down ML Prediction Service.")
 
 
-# ---------------------------------------------------------------------------
-# FastAPI Application — metadata appears in /docs and /openapi.json
-# ---------------------------------------------------------------------------
 app = FastAPI(
     title="Stock Market Prediction Service",
     description=(
         "ML microservice for predicting stock prices from financial features "
-        "and yfinance data.  Combine fundamental analysis (PE ratio, EPS, ROE, …) "
-        "with technical indicators (moving averages, volatility) via an XGBoost + "
-        "RandomForest ensemble."
+        "and yfinance data via an XGBoost + RandomForest ensemble."
     ),
     version="1.1.0",
     lifespan=lifespan,
 )
 
-# ---------------------------------------------------------------------------
-# CORS — allow the Laravel frontend (or any client) to call this service.
-# Tighten ``allow_origins`` to your Laravel host in production.
-# ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -222,25 +65,8 @@ app.add_middleware(
 )
 
 
-# =============================================================================
-# Request Schemas (Pydantic)
-# =============================================================================
-# These validate incoming JSON automatically.  If a required field is missing
-# or has the wrong type, FastAPI returns a 422 error with details.
-
-
 class TickerRequest(BaseModel):
-    """
-    Generic request for any yfinance-based endpoint that needs a ticker symbol.
-
-    Attributes:
-        ticker:   Stock symbol, e.g. ``"AAPL"``, ``"TSLA"``, ``"MSFT"``.
-        period:   Look-back window.  Valid values: ``1d``, ``5d``, ``1mo``,
-                  ``3mo``, ``6mo``, ``1y``, ``2y``, ``5y``, ``10y``, ``ytd``,
-                  ``max``.
-        interval: Candle / bar size.  Valid values: ``1m``, ``5m``, ``15m``,
-                  ``30m``, ``1h``, ``1d``, ``1wk``, ``1mo``.
-    """
+    """Generic request for yfinance-based endpoints."""
 
     ticker: str = Field(..., description="Stock symbol, e.g. AAPL, TSLA, MSFT.")
     period: str = Field(
@@ -254,23 +80,7 @@ class TickerRequest(BaseModel):
 
 
 class TrainRequest(BaseModel):
-    """
-    Request to train the ML ensemble on a ticker's historical price data.
-
-    The training pipeline:
-    1. Fetch OHLCV data for ``ticker`` via yfinance.
-    2. Engineer technical features (moving averages, volatility, returns).
-    3. Create a supervised target: closing price ``target_days_ahead`` later.
-    4. Split chronologically into train / test sets.
-    5. Fit XGBoost and RandomForest regressors.
-    6. Return MAE, RMSE, R² on the test set.
-
-    Attributes:
-        ticker:            Stock symbol to train on.
-        period:            How far back to fetch training data (default ``"5y"``).
-        target_days_ahead: Trading days ahead to predict (1–252).
-        test_size:         Fraction of data held out for evaluation (0.1–0.4).
-    """
+    """Request to train the ensemble on a ticker's historical prices."""
 
     ticker: str = Field(..., description="Stock symbol to train on.")
     period: str = Field(
@@ -292,36 +102,15 @@ class TrainRequest(BaseModel):
 
 
 class PredictFromTickerRequest(BaseModel):
-    """
-    Convenience request that fetches fundamental features AND runs prediction
-    in a single round-trip.
-
-    Attributes:
-        ticker:        Stock symbol.
-        target_period: Prediction horizon (``1m``, ``3m``, ``6m``, ``1y``).
-    """
+    """Fetch fundamental features and run a prediction in one call."""
 
     ticker: str = Field(..., description="Stock symbol.")
     target_period: TargetPeriod = Field(default=TargetPeriod.THREE_MONTHS)
 
 
-# =============================================================================
-# Routes
-# =============================================================================
-
-
-# ── System ──────────────────────────────────────────────────────────────────
-
-
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health_check() -> HealthResponse:
-    """
-    Health check — used by Laravel or monitoring tools to verify the service
-    is alive and the model is loaded.
-
-    Returns:
-        ``HealthResponse`` with ``status``, ``model_loaded``, and ``model_version``.
-    """
+    """Report service status and model state."""
     return HealthResponse(
         status="ok",
         model_loaded=predictor.is_loaded,
@@ -329,46 +118,9 @@ async def health_check() -> HealthResponse:
     )
 
 
-# ── Prediction (fundamental mode) ────────────────────────────────────────────
-
-
 @app.post("/api/v1/predict", response_model=PredictionResponse, tags=["Prediction"])
 async def predict(request: PredictionRequest) -> PredictionResponse:
-    """
-    Generate a stock price prediction **from manually-provided financial features**.
-
-    Use this endpoint when you already have financial-statement data
-    (from your own database, another API, or the ``/api/v1/data/financial-features``
-    endpoint) and want to run the ML predictor on it.
-
-    The 11 required features are:
-        - ``pe_ratio`` — Price-to-earnings ratio
-        - ``debt_to_equity`` — Total debt / total equity
-        - ``current_ratio`` — Current assets / current liabilities
-        - ``free_cash_flow`` — Operating cash flow minus capex
-        - ``gross_margin`` — (Revenue - COGS) / Revenue
-        - ``operating_margin`` — Operating income / Revenue
-        - ``roe`` — Return on equity (net income / equity)
-        - ``roa`` — Return on assets
-        - ``eps`` — Earnings per share
-        - ``market_cap`` — Total market capitalisation
-        - ``revenue_growth`` — Year-over-year revenue growth rate
-
-    Also accepts an optional ``latest_price`` key; if provided, the response
-    includes a direction signal (bullish / bearish / neutral) relative to
-    that price.
-
-    Args:
-        request: ``PredictionRequest`` with a ``features`` dict and optional
-                 ``target_period``.
-
-    Returns:
-        ``PredictionResponse`` with:
-        - ``predicted_price`` — forecasted price in USD
-        - ``confidence_score`` — 0–1 confidence estimate
-        - ``direction`` — ``"bullish"``, ``"bearish"``, or ``"neutral"``
-        - ``feature_importance`` — ranked list of which features mattered most
-    """
+    """Predict from manually-provided financial features."""
     try:
         features: dict[str, Any] = request.features
         features["target_period"] = request.target_period.value
@@ -394,30 +146,7 @@ async def predict(request: PredictionRequest) -> PredictionResponse:
 
 @app.post("/api/v1/predict/from-ticker", tags=["Prediction"])
 async def predict_from_ticker(request: PredictFromTickerRequest) -> dict[str, Any]:
-    """
-    **One-shot convenience endpoint**: fetch fundamental features for a ticker
-    via yfinance, then immediately run the ML predictor on those features.
-
-    Internally this does two things:
-    1. ``YFinanceFetcher.get_financial_features(ticker)`` — pulls PE ratio,
-       EPS, ROE, debt-to-equity, etc. from Yahoo Finance.
-    2. ``StockPredictor.predict(features)`` — runs the ensemble / heuristic.
-
-    This saves you from making two separate HTTP calls when you just want a
-    quick prediction for a known ticker.
-
-    Args:
-        request: ``PredictFromTickerRequest`` with ``ticker`` and optional
-                 ``target_period``.
-
-    Returns:
-        JSON object containing:
-        - ``ticker`` — the symbol that was queried
-        - ``current_price`` — latest trading price from yfinance
-        - ``predicted_price``, ``confidence_score``, ``direction``,
-          ``feature_importance`` — prediction results
-        - ``metadata.source`` — always ``"yfinance"``
-    """
+    """Fetch fundamental features for a ticker and predict in one call."""
     try:
         features = fetcher.get_financial_features(request.ticker)
         feature_dict = features.to_dict()
@@ -439,8 +168,6 @@ async def predict_from_ticker(request: PredictFromTickerRequest) -> dict[str, An
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Enhanced Prediction (v2) ───────────────────────────────────────
-
 TIME_PERIOD_MAP: dict[str, int] = {
     "1m": 21,
     "3m": 63,
@@ -457,42 +184,15 @@ TIME_PERIOD_MAP: dict[str, int] = {
 async def predict_enhanced(
     request: EnhancedPredictionRequest,
 ) -> EnhancedPredictionResponse:
-    """
-    **Enhanced prediction** — accepts a company's full financial-statement
-    history from Laravel, enriches it with post-earnings price reactions
-    from yfinance, and returns a trading signal with key drivers.
-
-    This is the primary endpoint called by ``StockPredictionService`` in
-    Laravel when the user clicks "Run Prediction" on the dashboard.
-
-    Pipeline:
-        1. For each historical financial report, fetch the stock price on
-           the report date and ``timeframe`` trading days later via yfinance.
-        2. Compute the post-earnings price return for each report.
-        3. Extract trend signals from the financial ratios (EPS growth,
-           margin expansion, ROE trend, etc.).
-        4. Combine fundamental analysis with historical price-reaction data
-           to produce a signal (buy / hold / sell), expected return %,
-           confidence score, and ranked key drivers.
-
-    Args:
-        request: ``EnhancedPredictionRequest`` with ticker, timeframe,
-                 current_price, and financial_history array.
-
-    Returns:
-        ``EnhancedPredictionResponse`` with signal_type, predicted_return,
-        confidence_score, key_drivers, current_price, and target_price.
-    """
+    """Enrich financial history with price reactions and return a signal."""
     try:
         ticker = request.ticker.upper()
         timeframe = request.timeframe
         current_price = request.current_price
         history = request.financial_history
 
-        # Determine number of trading days for the timeframe
         trading_days = TIME_PERIOD_MAP.get(timeframe, 63)
 
-        # ── 1. Enrich financial history with yfinance price reactions ──
         enriched: list[dict[str, Any]] = []
         for record in history:
             enriched_record = {
@@ -540,10 +240,8 @@ async def predict_enhanced(
 
             enriched.append(enriched_record)
 
-        # ── 2. Compute fundamental trends ──
         key_drivers = _compute_key_drivers(enriched, timeframe)
 
-        # ── 2b. Compute technical alignment (price momentum) ──
         tech_driver = _compute_technical_alignment(ticker, key_drivers, timeframe)
         tech_alignment_data: dict[str, Any] | None = None
         if tech_driver is not None:
@@ -577,12 +275,10 @@ async def predict_enhanced(
                 "reason": "Insufficient data or mixed technical signals — no adjustment applied.",
             }
 
-        # ── 3. Determine signal ──
         signal_type, predicted_return, confidence_score, confidence_breakdown = _determine_signal(
             enriched, key_drivers, current_price, trading_days, tech_alignment_data
         )
 
-        # ── 4. Compute target price ──
         target_price = None
         if current_price and predicted_return is not None:
             target_price = round(current_price * (1.0 + predicted_return), 2)
@@ -608,46 +304,15 @@ def _compute_key_drivers(
     enriched: list[dict[str, Any]],
     timeframe: str,
 ) -> list[KeyDriver]:
-    """
-    Analyse the enriched financial history to identify the top factors
-    driving the prediction signal.
-
-    This is the CORE of the fundamental analysis engine. It scans all
-    historical financial statements for statistically meaningful trends:
-
-    ┌──────────────────────────────────────────────────────────────┐
-    │ Trend Check         │ What It Looks For       │ Threshold    │
-    ├──────────────────────────────────────────────────────────────┤
-    │ 1. EPS Trend        │ First vs last EPS       │ Any change   │
-    │ 2. ROE Trajectory   │ ROE across reports      │ ±2% change   │
-    │ 3. Margin Direction │ Gross margin trend      │ ±2% change   │
-    │ 4. Leverage Change  │ Debt-to-equity trend    │ ±0.3 change  │
-    │ 5. Post-Earnings    │ Average price return    │ ±3% return   │
-    │    History           │ after past reports      │              │
-    └──────────────────────────────────────────────────────────────┘
-
-    Each trend that triggers becomes a "KeyDriver" — a piece of evidence
-    that counts toward the final BUY/SELL/HOLD signal. Positive drivers
-    add +1 to the net score; negative drivers subtract 1.
-
-    Args:
-        enriched: List of financial records with yfinance price reactions.
-        timeframe: Prediction horizon (not directly used here but available).
-
-    Returns:
-        List of KeyDriver objects, each explaining one trend found.
-    """
+    """Identify the trends that drive the final BUY/SELL/HOLD signal."""
     drivers: list[KeyDriver] = []
 
     if len(enriched) < 2:
         return drivers
 
-    # ── 1. EPS TREND ───────────────────────────────────────────
-    # Compare the first and last EPS values in the history.
-    # Growing EPS = company is becoming more profitable per share.
     eps_values = [r.get("eps") for r in enriched if r.get("eps") is not None]
     if len(eps_values) >= 2:
-        eps_change = eps_values[-1] - eps_values[0]   # last minus first
+        eps_change = eps_values[-1] - eps_values[0]
         if eps_change > 0:
             drivers.append(KeyDriver(
                 factor="EPS Growth",
@@ -661,10 +326,6 @@ def _compute_key_drivers(
                 detail=f"EPS fell from ${eps_values[0]:.2f} to ${eps_values[-1]:.2f}.",
             ))
 
-    # ── 2. ROE TRAJECTORY ──────────────────────────────────────
-    # ROE = Return on Equity = Net Income / Shareholder Equity.
-    # Measures how efficiently the company uses investor money.
-    # Threshold: ±2 percentage points (e.g., 15% → 17% triggers "improvement").
     roe_values = [r.get("roe") for r in enriched if r.get("roe") is not None]
     if len(roe_values) >= 2:
         roe_trend = roe_values[-1] - roe_values[0]
@@ -681,9 +342,6 @@ def _compute_key_drivers(
                 detail=f"ROE declined by {abs(roe_trend):.1%}.",
             ))
 
-    # ── 3. MARGIN DIRECTION ────────────────────────────────────
-    # Gross margin = (Revenue - COGS) / Revenue.
-    # Expanding margins = company has pricing power or cost efficiency.
     margin_values = [r.get("gross_margin") for r in enriched if r.get("gross_margin") is not None]
     if len(margin_values) >= 2:
         margin_trend = margin_values[-1] - margin_values[0]
@@ -700,10 +358,6 @@ def _compute_key_drivers(
                 detail=f"Gross margin contracted by {abs(margin_trend):.1%}.",
             ))
 
-    # ── 4. LEVERAGE CHANGE ─────────────────────────────────────
-    # Debt-to-equity = Total Liabilities / Shareholder Equity.
-    # Rising D/E = company is taking on more debt (riskier).
-    # Falling D/E = company is paying down debt (safer).
     dte_values = [r.get("debt_to_equity") for r in enriched if r.get("debt_to_equity") is not None]
     if len(dte_values) >= 2:
         dte_trend = dte_values[-1] - dte_values[0]
@@ -720,10 +374,6 @@ def _compute_key_drivers(
                 detail=f"Debt-to-equity decreased by {abs(dte_trend):.2f}.",
             ))
 
-    # ── 5. POST-EARNINGS PRICE HISTORY ─────────────────────────
-    # Average stock price return after past earnings reports.
-    # If the stock historically rallies after earnings → bullish signal.
-    # If it historically drops → bearish signal.
     price_returns = [
         r.get("price_return") for r in enriched
         if r.get("price_return") is not None
@@ -751,47 +401,10 @@ def _compute_technical_alignment(
     drivers: list[KeyDriver],
     timeframe: str,
 ) -> KeyDriver | None:
-    """
-    THE 6TH TREND CHECK — compares fundamental direction with actual
-    price momentum from Yahoo Finance.
-
-    This is the bridge between fundamental analysis (what the company's
-    numbers say) and technical analysis (what the market is actually doing).
-
-    ┌─────────────────────────────────────────────────────────────────┐
-    │ LOGIC:                                                          │
-    │                                                                  │
-    │ 1. Determine fundamental direction from existing 5 drivers:      │
-    │    positive > negative → "bullish"                                │
-    │    negative > positive → "bearish"                                │
-    │    equal → "neutral"                                              │
-    │                                                                  │
-    │ 2. Fetch 20-day daily + 4-week weekly OHLCV momentum from        │
-    │    Yahoo Finance (via YFinanceFetcher.get_price_momentum)        │
-    │                                                                  │
-    │ 3. Determine technical direction:                                │
-    │    daily_trend = bullish if price ↑ > 2% in 20 days              │
-    │    weekly_trend = bullish if price ↑ > 3% in 4 weeks             │
-    │    Combined: daily + weekly scores → bullish/bearish              │
-    │                                                                  │
-    │ 4. Compare:                                                       │
-    │    Fundamentals + Technical agree → ALIGNMENT (+10% confidence)   │
-    │    Fundamentals + Technical disagree → CONTRADICTION (-10%)       │
-    │    Mixed/insufficient → no driver added                           │
-    └─────────────────────────────────────────────────────────────────┘
-
-    Args:
-        ticker: Stock symbol to fetch momentum for.
-        drivers: Fundamental key drivers (used to determine direction).
-        timeframe: Prediction horizon.
-
-    Returns:
-        A KeyDriver if alignment/contradiction is detected, else None.
-    """
+    """Compare fundamental direction with price momentum; return a driver if they agree or clash."""
     if not drivers:
         return None
 
-    # ── Step 1: Determine fundamental direction ──
     positive = sum(1 for d in drivers if d.impact == "positive")
     negative = sum(1 for d in drivers if d.impact == "negative")
     net_score = positive - negative
@@ -803,7 +416,6 @@ def _compute_technical_alignment(
     else:
         fundamental_direction = "bearish"
 
-    # ── Step 2: Fetch price momentum data ──
     try:
         momentum = fetcher.get_price_momentum(ticker)
     except Exception:
@@ -820,9 +432,7 @@ def _compute_technical_alignment(
     weekly_momentum = momentum.get("weekly_momentum_pct")
     green_ratio = momentum.get("green_candle_ratio")
 
-    # ── Step 3: Build combined technical direction ──
-    # Each trend votes: +1 for bullish, -1 for bearish.
-    # Combined score ranges from -2 (both bearish) to +2 (both bullish).
+    # Each trend votes: +1 bullish, -1 bearish.
     technical_signals = []
     if daily_trend == "bullish":
         technical_signals.append(1)
@@ -837,17 +447,15 @@ def _compute_technical_alignment(
     if not technical_signals:
         return None
 
-    tech_score = sum(technical_signals)  # -2 to +2
+    tech_score = sum(technical_signals)
 
-    # Determine dominant technical direction
     if tech_score >= 1:
         technical_direction = "bullish"
     elif tech_score <= -1:
         technical_direction = "bearish"
     else:
-        return None  # Mixed signals (e.g., daily bullish but weekly bearish)
+        return None
 
-    # ── Build human-readable detail string ──
     detail_parts = []
     if daily_momentum is not None:
         detail_parts.append(f"Daily ({momentum['data_points']}d): {daily_momentum:+.2%}")
@@ -857,9 +465,7 @@ def _compute_technical_alignment(
         detail_parts.append(f"Green candles: {green_ratio:.0%}")
     detail = " | ".join(detail_parts)
 
-    # ── Step 4: Compare fundamentals vs technicals ──
     if fundamental_direction == "neutral":
-        # Fundamentals are mixed; technicals provide a directional signal
         if technical_direction == "bullish":
             return KeyDriver(
                 factor="Technical Momentum (Bullish)",
@@ -874,7 +480,6 @@ def _compute_technical_alignment(
             )
 
     if fundamental_direction == technical_direction:
-        # ✅ ALIGNMENT: price action confirms what the numbers suggest
         direction_label = "Bullish" if technical_direction == "bullish" else "Bearish"
         impact = "positive" if technical_direction == "bullish" else "negative"
         return KeyDriver(
@@ -883,9 +488,7 @@ def _compute_technical_alignment(
             detail=f"Price momentum confirms fundamental {fundamental_direction} signal. {detail}",
         )
     else:
-        # ❌ CONTRADICTION: price action disagrees with fundamentals
         direction_label = "Bullish" if technical_direction == "bullish" else "Bearish"
-        # The impact is OPPOSITE of fundamentals — this reduces net_score
         impact = "negative" if fundamental_direction == "bullish" else "positive"
         return KeyDriver(
             factor=f"Technical Contradiction ({direction_label})",
@@ -901,52 +504,12 @@ def _determine_signal(
     trading_days: int,
     tech_alignment_data: dict[str, Any] | None = None,
 ) -> tuple[str, float | None, float, dict[str, Any]]:
-    """
-    THE FINAL DECISION — takes all 6 trend checks and produces the
-    trading signal (BUY / HOLD / SELL), predicted return %, and
-    confidence score.
-
-    ┌─────────────────────────────────────────────────────────────┐
-    │ CONFIDENCE FORMULA:                                         │
-    │                                                              │
-    │ base_confidence = 40%  (always starts here)                  │
-    │ driver_bonus     = (number_of_drivers × 10%)                │
-    │ raw_confidence   = 40% + driver_bonus                       │
-    │ final_confidence = min(raw_confidence, 95%)  ← capped       │
-    │                                                              │
-    │ Example: 4 drivers found → 40% + 40% = 80% confidence       │
-    │                                                              │
-    │ SIGNAL RULES:                                                │
-    │                                                              │
-    │ net_score = positive_drivers - negative_drivers              │
-    │                                                              │
-    │ net_score ≥ +2  →  BUY   (strong bullish evidence)          │
-    │ net_score ≤ -2  →  SELL  (strong bearish evidence)          │
-    │ otherwise       →  HOLD  (mixed or insufficient evidence)   │
-    │                                                              │
-    │ PREDICTED RETURN:                                            │
-    │ Uses average historical post-earnings return ± 2%           │
-    │ adjustment based on signal direction.                        │
-    └─────────────────────────────────────────────────────────────┘
-
-    Args:
-        enriched: Financial records with price reactions.
-        drivers: All 5-6 KeyDrivers (fundamental + technical alignment).
-        current_price: Latest known price.
-        trading_days: Trading days for the prediction horizon.
-        tech_alignment_data: Technical momentum data for display.
-
-    Returns:
-        Tuple of (signal_type, predicted_return, confidence_score,
-        confidence_breakdown).
-    """
-    # Count drivers by impact type
+    """Turn driver balance into a signal, predicted return and confidence score."""
     positive = sum(1 for d in drivers if d.impact == "positive")
     negative = sum(1 for d in drivers if d.impact == "negative")
     neutral = sum(1 for d in drivers if d.impact == "neutral")
-    total = positive + negative   # neutral drivers don't count
+    total = positive + negative
 
-    # ── Edge case: no drivers found at all ──
     if total == 0:
         return ("hold", 0.0, 0.3, {
             "base_confidence": 0.40,
@@ -960,19 +523,14 @@ def _determine_signal(
             "technical_alignment": tech_alignment_data,
         })
 
-    # ── Signal from driver balance ──
     net_score = positive - negative
 
-    # ── Confidence calculation ──
-    # Base 40% + 10% per driver, capped at 95%
-    # (No prediction can ever be 100% certain — the market is unpredictable)
     base_confidence = 0.40
-    driver_bonus = total / 10.0   # 1 driver = +10%, 2 = +20%, ..., 6 = +60%
+    driver_bonus = total / 10.0
     raw_confidence = base_confidence + driver_bonus
-    confidence = round(min(raw_confidence, 0.95), 4)  # clamp to 95% max
+    confidence = round(min(raw_confidence, 0.95), 4)
     cap_applied = raw_confidence > 0.95
 
-    # Build a human-readable formula explanation
     formula = f"{base_confidence:.0%} base + ({total} drivers × 10%) = {raw_confidence:.0%}"
     if cap_applied:
         formula += " → capped at 95%"
@@ -991,9 +549,6 @@ def _determine_signal(
         "technical_alignment": tech_alignment_data,
     }
 
-    # ── Predicted return from historical price reactions ──
-    # Take the average post-earnings return across all reports
-    # and adjust it based on the fundamental signal direction.
     price_returns = [
         r.get("price_return") for r in enriched
         if r.get("price_return") is not None
@@ -1002,53 +557,22 @@ def _determine_signal(
         sum(price_returns) / len(price_returns) if price_returns else 0.0
     )
 
-    # Blend fundamentals signal with historical return
     if net_score >= 2:
-        # Strong buy: at least +3% or historical average +2%
         predicted_return = round(max(avg_historical_return + 0.02, 0.03), 4)
         signal = "buy"
     elif net_score <= -2:
-        # Strong sell: at most -3% or historical average -2%
         predicted_return = round(min(avg_historical_return - 0.02, -0.03), 4)
         signal = "sell"
     else:
-        # Hold: just use the historical average
         predicted_return = round(avg_historical_return, 4)
         signal = "hold"
 
     return (signal, predicted_return, confidence, confidence_breakdown)
 
 
-# ── Data (yfinance) ──────────────────────────────────────────────────────────
-
-
 @app.post("/api/v1/data/stock-info", tags=["Data"])
 async def get_stock_info(request: TickerRequest) -> dict[str, Any]:
-    """
-    Return structured **stock metadata** for a ticker, fetched from Yahoo Finance.
-
-    This endpoint calls ``yfinance.Ticker(ticker).info`` and extracts the
-    most commonly needed fields into a flat JSON response.
-
-    Fields returned:
-        - ``ticker`` — normalised uppercase symbol
-        - ``company_name`` — long name from Yahoo Finance
-        - ``sector`` / ``industry`` — GICS classification
-        - ``market_cap`` — total market capitalisation
-        - ``current_price`` — latest trading price
-        - ``pe_ratio`` — trailing or forward P/E
-        - ``eps`` — trailing earnings per share
-        - ``beta`` — 5-year monthly beta vs S&P 500
-        - ``fifty_two_week_high`` / ``fifty_two_week_low``
-        - ``currency`` — typically ``"USD"``
-        - ``fetched_at`` — ISO-8601 timestamp of when the data was pulled
-
-    Args:
-        request: ``TickerRequest`` with the ticker symbol.
-
-    Returns:
-        Dict with the fields listed above.
-    """
+    """Return structured stock metadata from Yahoo Finance."""
     try:
         info = fetcher.get_stock_info(request.ticker)
         return {
@@ -1073,29 +597,7 @@ async def get_stock_info(request: TickerRequest) -> dict[str, Any]:
 
 @app.post("/api/v1/data/historical", tags=["Data"])
 async def get_historical(request: TickerRequest) -> dict[str, Any]:
-    """
-    Return **historical OHLCV price data** for a ticker via yfinance.
-
-    This calls ``yfinance.Ticker(ticker).history(period, interval)`` and
-    returns the rows as a JSON array.  Each row contains:
-
-    .. code-block:: json
-
-        {
-          "date": "2025-01-15T00:00:00-0500",
-          "open": 150.0,
-          "high": 152.5,
-          "low": 149.0,
-          "close": 151.2,
-          "volume": 55000000
-        }
-
-    Args:
-        request: ``TickerRequest`` with ``ticker``, ``period``, and ``interval``.
-
-    Returns:
-        ``{"ticker": "...", "period": "...", "interval": "...", "count": N, "data": [...]}``
-    """
+    """Return historical OHLCV prices for a ticker."""
     try:
         data = fetcher.get_historical_prices(
             request.ticker,
@@ -1116,24 +618,7 @@ async def get_historical(request: TickerRequest) -> dict[str, Any]:
 
 @app.post("/api/v1/data/financial-features", tags=["Data"])
 async def get_financial_features(request: TickerRequest) -> dict[str, Any]:
-    """
-    Return the **11 fundamental financial features** that the prediction model
-    requires, fetched from Yahoo Finance for the given ticker.
-
-    This is useful when you want to inspect the raw features before running
-    a prediction, or store them in a database for later use.
-
-    The returned ``features`` dict contains:
-        ``pe_ratio``, ``debt_to_equity``, ``current_ratio``, ``free_cash_flow``,
-        ``gross_margin``, ``operating_margin``, ``roe``, ``roa``, ``eps``,
-        ``market_cap``, ``revenue_growth``, and ``latest_price``.
-
-    Args:
-        request: ``TickerRequest`` with the ticker symbol.
-
-    Returns:
-        ``{"ticker": "...", "features": {...}, "latest_price": ..., "fetched_at": "..."}``
-    """
+    """Return the 11 fundamental features used by the prediction model."""
     try:
         features = fetcher.get_financial_features(request.ticker)
         return {
@@ -1147,56 +632,9 @@ async def get_financial_features(request: TickerRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Training ─────────────────────────────────────────────────────────────────
-
-
 @app.post("/api/v1/train", tags=["Training"])
 async def train_model(request: TrainRequest) -> dict[str, Any]:
-    """
-    **Train the ML ensemble** on a ticker's historical price data from yfinance.
-
-    Full training pipeline:
-        1. Fetch OHLCV data for the ticker (default: 5 years of daily bars).
-        2. Engineer technical features:
-           - ``returns_5d`` / ``returns_20d`` — 5- and 20-day price returns
-           - ``volatility_20d`` — rolling 20-day standard deviation of returns
-           - ``volume_ratio`` — current volume vs 20-day average
-           - ``sma_20`` / ``sma_50`` — simple moving averages
-           - ``price_to_sma20`` — close price relative to 20-day SMA
-        3. Create the supervised target: closing price ``target_days_ahead``
-           trading days in the future.
-        4. Split chronologically (no shuffle — respects time order).
-        5. Scale features with ``StandardScaler``.
-        6. Fit XGBoost and RandomForest regressors independently.
-        7. Ensemble prediction = average of both models.
-        8. Evaluate on the test set: MAE, RMSE, R².
-
-    After training, the model stays in memory and can be used for
-    ``predict_price()`` calls.  Note: training replaces any previously
-    trained model state.
-
-    Training is ticker-specific.  A model trained on AAPL will not
-    generalise well to TSLA — you should train separately per ticker.
-
-    Args:
-        request: ``TrainRequest`` with ticker, period, target_days_ahead,
-                 and test_size.
-
-    Returns:
-        .. code-block:: json
-
-            {
-              "ticker": "AAPL",
-              "samples": 1200,
-              "target_days_ahead": 60,
-              "metrics": {"mae": 5.23, "rmse": 7.89, "r2": 0.85},
-              "model_version": "1.1.0"
-            }
-
-        - ``mae`` — Mean Absolute Error (average dollar error)
-        - ``rmse`` — Root Mean Squared Error (penalises large errors)
-        - ``r2`` — R² score (1.0 = perfect fit, 0.0 = mean baseline)
-    """
+    """Train the ensemble on a ticker's historical prices."""
     try:
         logger.info(
             "Training on %s (period=%s, target_days=%d)...",
@@ -1205,14 +643,12 @@ async def train_model(request: TrainRequest) -> dict[str, Any]:
             request.target_days_ahead,
         )
 
-        # Step 1: Fetch training data with technical features from yfinance
         df = fetcher.get_training_data(
             request.ticker,
             period=request.period,
             target_days_ahead=request.target_days_ahead,
         )
 
-        # Step 2: Train XGBoost + RandomForest ensemble
         metrics = predictor.train_on_price_history(df, test_size=request.test_size)
 
         return {
@@ -1227,17 +663,14 @@ async def train_model(request: TrainRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# =============================================================================
-# Entry Point — run with ``python main.py``
-# =============================================================================
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",   # Listen on all network interfaces
-        port=8001,         # Port 8001 (separate from Laravel's 8000)
-        reload=True,       # Auto-reload on code changes (disable in production)
+        host="0.0.0.0",
+        port=8001,
+        reload=True,
         log_level="info",
     )
 

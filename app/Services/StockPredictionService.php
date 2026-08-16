@@ -11,15 +11,8 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Stock Prediction Service (Enhanced)
- *
- * Communicates with the Python FastAPI AI microservice to generate
- * trading signals based on:
- *   1. Historical financial statement trends (EPS, ROE, margins, leverage)
- *   2. Post-earnings price reactions (fetched by the Python service via yfinance)
- *
- * Called by PredictionController when the user clicks "Run Prediction"
- * on the company dashboard with a selected timeframe.
+ * Generates trading signals by sending a company's financial history to the
+ * Python ML microservice and blending the result with local price momentum.
  */
 final class StockPredictionService
 {
@@ -29,26 +22,15 @@ final class StockPredictionService
 
     public function __construct()
     {
-        $this->baseUrl = rtrim((string) config('services.ai.url', 'http://localhost:8001'), '/');
-        $this->apiKey = (string) config('services.ai.api_key', '');
+        $this->baseUrl = rtrim((string) config('services.ml_service.url', 'http://localhost:8001'), '/');
+        $this->apiKey = (string) config('services.ml_service.api_key', '');
     }
 
     /**
-     * Run an enhanced prediction for a company.
-     *
-     * Builds a JSON payload containing every financial statement on file
-     * plus the latest known price, sends it to the Python AI microservice,
-     * and stores the returned signal in the predictions table.
-     *
-     * @param  Company  $company  The company to predict for
-     * @param  string  $timeframe  One of: "1m", "3m", "6m", "1y"
-     * @return Prediction The newly created Prediction model
-     *
      * @throws \RuntimeException|ConnectionException
      */
     public function predict(Company $company, string $timeframe = '3m'): Prediction
     {
-        // 1. Build financial history payload
         $financialHistory = $this->buildFinancialHistory($company);
 
         if (empty($financialHistory)) {
@@ -57,7 +39,6 @@ final class StockPredictionService
             );
         }
 
-        // 2. Build request payload
         $payload = [
             'ticker' => $company->ticker,
             'timeframe' => $this->normalizeTimeframe($timeframe),
@@ -65,7 +46,6 @@ final class StockPredictionService
             'financial_history' => $financialHistory,
         ];
 
-        // 3. Create prediction record (status: processing)
         $prediction = Prediction::create([
             'company_id' => $company->id,
             'target_period' => $this->normalizeTimeframe($timeframe),
@@ -79,7 +59,6 @@ final class StockPredictionService
             'history_count' => count($financialHistory),
         ]);
 
-        // 4. Send to Python AI microservice
         try {
             $response = Http::withHeaders([
                 'Content-Type' => 'application/json',
@@ -106,16 +85,13 @@ final class StockPredictionService
             /** @var array<string, mixed> $result */
             $result = $response->json();
 
-            // 5. Compute technical momentum from local DB
             $techMomentum = $this->calculateTechnicalMomentum($company, $timeframe);
 
-            // 6. Get fundamental signal and drivers from Python
             $fundamentalSignal = $result['signal_type'] ?? 'hold';
             $keyDrivers = $result['key_drivers'] ?? [];
             $confidenceScore = (float) ($result['confidence_score'] ?? 0.5);
             $confidenceBreakdown = $result['confidence_breakdown'] ?? [];
 
-            // 7. Apply technical alignment adjustment
             $alignmentResult = $this->applyTechnicalAlignment(
                 fundamentalSignal: $fundamentalSignal,
                 techMomentum: $techMomentum,
@@ -124,27 +100,20 @@ final class StockPredictionService
                 confidenceBreakdown: $confidenceBreakdown,
             );
 
-            // 8. Map final AI response to Prediction columns
             $prediction->markCompleted([
                 'predicted_price' => $result['target_price'] ?? null,
                 'confidence_score' => $alignmentResult['adjusted_confidence'],
                 'prediction_direction' => $this->mapSignalToDirection($result['signal_type'] ?? 'hold'),
+                'signal_type' => $result['signal_type'] ?? null,
+                'predicted_return' => $result['predicted_return'] ?? null,
                 'feature_importance' => $this->mapKeyDrivers($alignmentResult['drivers']),
                 'model_metadata' => [
                     'model' => $result['model'] ?? 'xgboost_rf_ensemble',
                     'version' => $result['version'] ?? '1.1.0',
-                    'signal_type' => $result['signal_type'] ?? null,
-                    'predicted_return' => $result['predicted_return'] ?? null,
                     'current_price' => $result['current_price'] ?? null,
                     'confidence_breakdown' => $alignmentResult['confidence_breakdown'],
                     'requested_at' => now()->toIso8601String(),
                 ],
-            ]);
-
-            // Also update the explicit columns
-            $prediction->update([
-                'signal_type' => $result['signal_type'] ?? null,
-                'predicted_return' => $result['predicted_return'] ?? null,
             ]);
 
             Log::info('StockPredictionService: prediction completed', [
@@ -189,14 +158,7 @@ final class StockPredictionService
         }
     }
 
-    // ── Private helpers ────────────────────────────────────────────
-
     /**
-     * Build an array of financial-statement records for the AI payload.
-     *
-     * Returns statements ordered oldest → newest so the Python service
-     * can compute trends across time.
-     *
      * @return list<array<string, mixed>>
      */
     private function buildFinancialHistory(Company $company): array
@@ -273,16 +235,7 @@ final class StockPredictionService
         }, $keyDrivers, array_keys($keyDrivers));
     }
 
-    // ── Technical Momentum (Local DB) ─────────────────────────────
-
     /**
-     * Calculate technical price momentum from the local
-     * daily_price_histories table.
-     *
-     * Queries the most recent OHLC candles for the company, computes
-     * net price change and green/red candle ratio, and returns a
-     * structured technical signal.
-     *
      * @return array{net_change_pct: float|null, green_candle_ratio: float|null, technical_signal: string, data_points: int, start_open: float|null, latest_close: float|null, detail: string}
      */
     public function calculateTechnicalMomentum(Company $company, string $timeframe): array
@@ -298,7 +251,6 @@ final class StockPredictionService
 
         $dataPoints = $candles->count();
 
-        // Default empty result
         $empty = [
             'net_change_pct' => null,
             'green_candle_ratio' => null,
@@ -319,19 +271,16 @@ final class StockPredictionService
         $startOpen = $first->open !== null ? (float) $first->open : null;
         $latestClose = $last->close !== null ? (float) $last->close : null;
 
-        // Net price change over the period
         $netChangePct = null;
         if ($startOpen !== null && $startOpen > 0 && $latestClose !== null) {
             $netChangePct = round((($latestClose - $startOpen) / $startOpen) * 100, 4);
         }
 
-        // Green candle ratio (Close > Open)
         $greenCount = $candles->filter(function (DailyPriceHistory $c): bool {
             return $c->close !== null && $c->open !== null && (float) $c->close > (float) $c->open;
         })->count();
         $greenCandleRatio = round($greenCount / $dataPoints, 4);
 
-        // Determine technical signal
         $technicalSignal = 'neutral';
         if ($netChangePct !== null) {
             if ($netChangePct > 1.5) {
@@ -339,7 +288,6 @@ final class StockPredictionService
             } elseif ($netChangePct < -1.5) {
                 $technicalSignal = 'bearish';
             }
-            // Reinforce with candle ratio: majority green/red can override borderline net change
             if ($greenCandleRatio >= 0.7 && $technicalSignal === 'neutral') {
                 $technicalSignal = 'bullish';
             } elseif ($greenCandleRatio <= 0.3 && $technicalSignal === 'neutral') {
@@ -351,7 +299,6 @@ final class StockPredictionService
             $technicalSignal = 'bearish';
         }
 
-        // Build human-readable detail
         $detailParts = [];
         if ($netChangePct !== null) {
             $detailParts[] = sprintf('Net change: %+.2f%% over %d candles', $netChangePct, $dataPoints);
@@ -370,25 +317,9 @@ final class StockPredictionService
     }
 
     /**
-     * Apply technical alignment adjustment to the confidence score
-     * and driver list.
+     * Aligned signals gain confidence; contradictory signals lose it.
+     * Confidence is clamped between 30% and 95%.
      *
-     * Compares the technical momentum signal with the fundamental
-     * signal from the Python AI service, then adjusts confidence
-     * and appends a technical driver accordingly.
-     *
-     * Rules:
-     *   - ALIGNED:   technical signal == fundamental signal → +10% confidence
-     *   - CONTRADICT: technical signal opposite fundamental   → −10% penalty
-     *   - NEUTRAL:   either signal is neutral                 → no adjustment
-     *
-     * Confidence is always clamped between 30% (floor) and 95% (cap).
-     *
-     * @param  string  $fundamentalSignal  'buy', 'hold', or 'sell'
-     * @param  array<string, mixed>  $techMomentum  Result from calculateTechnicalMomentum()
-     * @param  list<array<string, mixed>>  $keyDrivers  Fundamental drivers from Python
-     * @param  float  $confidenceScore  Current confidence (0-1)
-     * @param  array<string, mixed>  $confidenceBreakdown  Existing breakdown from Python
      * @return array{adjusted_confidence: float, drivers: list<array<string, mixed>>, confidence_breakdown: array<string, mixed>}
      */
     private function applyTechnicalAlignment(
@@ -415,10 +346,9 @@ final class StockPredictionService
         $techDriver = null;
         $alignmentResult = 'none';
 
-        // Only adjust if both signals are directional (not neutral)
+        // Only adjust when both signals are directional.
         if ($fundamentalDirection !== 'neutral' && $techSignal !== 'neutral' && $dataPoints >= 3) {
             if ($fundamentalDirection === $techSignal) {
-                // ALIGNMENT — confidence bonus
                 $adjustment = +0.10;
                 $alignmentResult = 'aligned';
                 $techDriver = [
@@ -431,7 +361,6 @@ final class StockPredictionService
                     ),
                 ];
             } else {
-                // CONTRADICTION — confidence penalty
                 $adjustment = -0.10;
                 $alignmentResult = 'contradiction';
                 $techDriver = [

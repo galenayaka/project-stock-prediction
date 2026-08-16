@@ -89,6 +89,8 @@ class Prediction extends Model
             'predicted_price' => $results['predicted_price'] ?? null,
             'confidence_score' => $results['confidence_score'] ?? null,
             'prediction_direction' => $results['prediction_direction'] ?? null,
+            'signal_type' => $results['signal_type'] ?? null,
+            'predicted_return' => $results['predicted_return'] ?? null,
             'feature_importance' => $results['feature_importance'] ?? null,
             'model_metadata' => $results['model_metadata'] ?? null,
         ]);

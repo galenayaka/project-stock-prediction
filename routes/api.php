@@ -5,8 +5,6 @@ use App\Http\Controllers\PredictionController;
 use App\Http\Controllers\WatchlistController;
 use Illuminate\Support\Facades\Route;
 
-// ─── API Routes ───────────────────────────────────────────────
-
 Route::prefix('v1')->name('api.v1.')->group(function (): void {
 
     // Companies

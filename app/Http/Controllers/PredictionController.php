@@ -45,19 +45,7 @@ final class PredictionController extends Controller
     }
 
     /**
-     * Run Prediction — the main "Run Prediction" button endpoint.
-     *
-     * Accepts a timeframe (e.g. "3 Months", "6 Months", "1 Year") and
-     * synchronously calls the StockPredictionService which:
-     *   1. Queries all financial statement history for the company.
-     *   2. Sends the enriched dataset to the Python AI microservice.
-     *   3. The AI evaluates fundamental trends AND post-earnings price
-     *      reactions via yfinance.
-     *   4. Returns a signal (buy/hold/sell), predicted return %,
-     *      confidence score, and key drivers.
-     *
-     * Returns the created Prediction as JSON so the UI can render
-     * it immediately.
+     * Run a prediction via the ML microservice and return the result.
      */
     public function store(
         TriggerPredictionRequest $request,

@@ -1,32 +1,4 @@
-"""
-Yahoo Finance data fetcher using the yfinance library.
-
-Copyright (c) 2026 Galen Nayaka Nayottama. All rights reserved.
-
-This module is the bridge between the ML prediction engine and real-world
-stock market data. It wraps the yfinance Python library (which itself wraps
-the Yahoo Finance API) into structured dataclasses that the predictor can
-consume directly.
-
-WHAT yfinance DOES:
-    yfinance downloads stock data from Yahoo Finance without needing an API
-    key.  It can fetch:
-    - Historical OHLCV prices (Open, High, Low, Close, Volume)
-    - Company metadata (sector, market cap, P/E ratio, beta)
-    - Financial statements (income, balance sheet, cash flow)
-    - Dividend and split history
-
-DATA FLOW:
-    Yahoo Finance API → yfinance (Python library) → YFinanceFetcher
-    → structured dataclasses → StockPredictor
-
-Provides:
-- Historical OHLCV price data for any ticker
-- Financial statement metrics (income, balance sheet, cash flow)
-- Derived financial ratios needed by the prediction model
-- Stock metadata (sector, market cap, etc.)
-- Price momentum calculations for technical alignment
-"""
+"""Wrap yfinance to fetch stock metadata, fundamentals and OHLCV history."""
 
 from __future__ import annotations
 
@@ -61,12 +33,7 @@ class StockInfo:
 
 @dataclass
 class FinancialFeatures:
-    """
-    Feature vector that maps directly to the StockPredictor's
-    REQUIRED_FEATURES: pe_ratio, debt_to_equity, current_ratio,
-    free_cash_flow, gross_margin, operating_margin, roe, roa,
-    eps, market_cap, revenue_growth.
-    """
+    """Feature vector matching StockPredictor's REQUIRED_FEATURES."""
     ticker: str
     pe_ratio: float
     debt_to_equity: float
@@ -101,20 +68,7 @@ class FinancialFeatures:
 
 
 class YFinanceFetcher:
-    """
-    Fetches stock data from Yahoo Finance using yfinance.
-
-    Usage:
-        fetcher = YFinanceFetcher()
-        info = fetcher.get_stock_info("AAPL")
-        features = fetcher.get_financial_features("AAPL")
-        history = fetcher.get_historical_prices("AAPL", period="1y")
-    """
-
-    def __init__(self) -> None:
-        pass
-
-    # ── Stock metadata ──────────────────────────────────────────
+    """Fetches stock data from Yahoo Finance using yfinance."""
 
     def get_stock_info(self, ticker: str) -> StockInfo:
         """Return structured stock metadata for a ticker."""
@@ -147,25 +101,13 @@ class YFinanceFetcher:
             currency=info.get("currency", "USD"),
         )
 
-    # ── Historical prices ───────────────────────────────────────
-
     def get_historical_prices(
         self,
         ticker: str,
         period: str = "1y",
         interval: str = "1d",
     ) -> list[dict[str, Any]]:
-        """
-        Fetch historical OHLCV data.
-
-        Args:
-            ticker: Stock symbol (e.g. 'AAPL').
-            period: One of 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max.
-            interval: One of 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo.
-
-        Returns:
-            List of OHLCV candles serializable as JSON.
-        """
+        """Fetch historical OHLCV data as JSON-serialisable dicts."""
         t = yf.Ticker(ticker)
         df: pd.DataFrame = t.history(period=period, interval=interval)
 
@@ -183,15 +125,8 @@ class YFinanceFetcher:
 
         return df.where(pd.notna(df), None).to_dict(orient="records")
 
-    # ── Financial features for prediction ───────────────────────
-
     def get_financial_features(self, ticker: str) -> FinancialFeatures:
-        """
-        Extract the 11 financial features required by StockPredictor
-        from Yahoo Finance fundamentals.
-
-        Uses the latest annual (and quarterly where needed) statements.
-        """
+        """Extract the 11 features required by StockPredictor from Yahoo Finance."""
         t = yf.Ticker(ticker)
         info = t.info or {}
 
@@ -204,10 +139,6 @@ class YFinanceFetcher:
             except (ValueError, TypeError):
                 return 0.0
 
-        # ── Balance-sheet derived ratios ──
-        # These are computed from raw Yahoo Finance fields:
-        # Debt-to-Equity = Total Debt / Total Equity
-        # Current Ratio  = Current Assets / Current Liabilities
         total_debt = _safe("totalDebt")
         total_equity = _safe("totalStockholderEquity") or _safe("shareholdersEquity") or 1.0
         debt_to_equity = round(total_debt / total_equity, 6) if total_equity else 0.0
@@ -216,31 +147,19 @@ class YFinanceFetcher:
         total_current_liabilities = _safe("totalCurrentLiabilities") or 1.0
         current_ratio = round(total_current_assets / total_current_liabilities, 4) if total_current_liabilities else 0.0
 
-        # ── Cash flow ──
-        # Free Cash Flow = Operating Cash Flow - Capital Expenditures
-        # This is "real" cash the company generates after investments.
         free_cash_flow = _safe("freeCashflow")
 
-        # ── Profitability ratios ──
-        # These come from Yahoo Finance as pre-computed ratios (0.0-1.0 range).
-        # grossMargins: (Revenue - Cost of Goods Sold) / Revenue
-        # operatingMargins: Operating Income / Revenue
-        # returnOnEquity: Net Income / Shareholder Equity (can exceed 1.0!)
-        # returnOnAssets: Net Income / Total Assets
         gross_margin = _safe("grossMargins")
         operating_margin = _safe("operatingMargins")
         roe = _safe("returnOnEquity")
         roa = _safe("returnOnAssets")
 
-        # ── Per-share / valuation ──
         pe_ratio = _safe("trailingPE") or _safe("forwardPE")
         eps = _safe("trailingEps")
         market_cap = _safe("marketCap")
 
-        # ── Growth ──
-        revenue_growth = _safe("revenueGrowth")  # YoY %
+        revenue_growth = _safe("revenueGrowth")
 
-        # ── Latest price ──
         latest_price = _safe("currentPrice") or _safe("regularMarketPrice") or _safe("previousClose")
 
         return FinancialFeatures(
@@ -259,90 +178,33 @@ class YFinanceFetcher:
             latest_price=latest_price,
         )
 
-    # ── Training data ───────────────────────────────────────────
-
     def get_training_data(
         self,
         ticker: str,
         period: str = "5y",
         target_days_ahead: int = 60,
     ) -> pd.DataFrame:
-        """
-        Build a training DataFrame for the ML ensemble.
-
-        This function fetches raw OHLCV data and ENGINEERS DERIVED FEATURES
-        that capture price patterns the ML models can learn from:
-
-        ┌────────────────────┬─────────────────────────────────────────┐
-        │ Feature            │ What It Captures                        │
-        ├────────────────────┼─────────────────────────────────────────┤
-        │ returns_5d         │ Short-term momentum (5-day % change)    │
-        │ returns_20d        │ Monthly momentum (20-day % change)      │
-        │ volatility_20d     │ Price stability (std dev of returns)    │
-        │ volume_ratio       │ Trading interest (volume vs 20d avg)    │
-        │ sma_20             │ Short-term trendline                    │
-        │ sma_50             │ Medium-term trendline                   │
-        │ price_to_sma20     │ Position relative to trend (>1 = above) │
-        │ target_close       │ THE LABEL: close price N days later     │
-        └────────────────────┴─────────────────────────────────────────┘
-
-        The target (target_close) is created by SHIFTING the close price
-        backward by target_days_ahead.  This turns a time-series forecasting
-        problem into a supervised learning problem: "given today's features,
-        predict the price 60 days from now."
-
-        Args:
-            ticker: Stock symbol.
-            period: Look-back window (e.g. '5y' for 5 years of data).
-            target_days_ahead: Trading days ahead to predict (default 60).
-
-        Returns:
-            DataFrame ready for StockPredictor.train_on_price_history().
-            NaN rows (from rolling windows and shifted target) are dropped.
-        """
+        """Build a labelled training DataFrame with engineered technical features."""
         t = yf.Ticker(ticker)
         df: pd.DataFrame = t.history(period=period)
 
         if df.empty:
             raise ValueError(f"No historical data for ticker '{ticker}' (period={period})")
 
-        # ── Target: what we're trying to predict ──
-        # Shift close price BACKWARD by target_days_ahead.
-        # Row i's target = close price at row (i + target_days_ahead).
-        # .shift(-N) moves values UP by N rows.
+        # Shift close price backward to build the supervised target.
         df["target_close"] = df["Close"].shift(-target_days_ahead)
 
-        # ── Feature engineering ──
-        # Each of these captures a different aspect of price behavior:
-
-        # Momentum: how much has the price moved recently?
-        df["returns_5d"] = df["Close"].pct_change(5)      # % change over 5 days
-        df["returns_20d"] = df["Close"].pct_change(20)     # % change over 20 days
-
-        # Volatility: how much does the price swing? (risk measure)
-        # .rolling(20).std() = standard deviation over 20-day window
+        df["returns_5d"] = df["Close"].pct_change(5)
+        df["returns_20d"] = df["Close"].pct_change(20)
         df["volatility_20d"] = df["Close"].pct_change().rolling(20).std()
-
-        # Volume: is trading activity unusually high or low?
-        # Ratio > 1 = higher volume than usual (more interest)
         df["volume_ratio"] = df["Volume"] / df["Volume"].rolling(20).mean()
-
-        # Moving averages: smooth the price to see the trend
-        df["sma_20"] = df["Close"].rolling(20).mean()     # 1-month trend
-        df["sma_50"] = df["Close"].rolling(50).mean()     # ~quarterly trend
-
-        # Position relative to trend: >1.0 = above 20-day average (uptrend)
+        df["sma_20"] = df["Close"].rolling(20).mean()
+        df["sma_50"] = df["Close"].rolling(50).mean()
         df["price_to_sma20"] = df["Close"] / df["sma_20"]
 
-        # ── Clean up ──
-        # Drop rows with NaN values. These come from:
-        # 1. Rolling windows at the start (first 20-50 rows)
-        # 2. The shifted target at the end (last target_days_ahead rows)
         df = df.dropna()
 
         return df
-
-    # ── Price reaction around earnings ─────────────────────────……─
 
     def get_price_reaction(
         self,
@@ -350,28 +212,13 @@ class YFinanceFetcher:
         report_date_str: str,
         trading_days: int = 63,
     ) -> tuple[float | None, float | None]:
-        """
-        Fetch the stock price on a report date and ``trading_days`` later.
-
-        Used by the enhanced prediction endpoint to include post-earnings
-        price reactions as a feature.
-
-        Args:
-            ticker:           Stock symbol.
-            report_date_str:  ISO-8601 date string of the financial report.
-            trading_days:     Number of trading days to look ahead.
-
-        Returns:
-            (price_before, price_after) — each is a float or None if
-            data is unavailable.
-        """
+        """Return (price_before, price_after) around a report date, or (None, None)."""
         try:
             report_date = datetime.fromisoformat(report_date_str.replace("Z", "+00:00"))
         except (ValueError, TypeError):
             logger.warning("Invalid report date '%s' for %s", report_date_str, ticker)
             return (None, None)
 
-        # Fetch from 30 days before report to look_ahead days after
         start_date = report_date - timedelta(days=30)
         end_date = report_date + timedelta(days=trading_days + 30)
 
@@ -381,7 +228,6 @@ class YFinanceFetcher:
         if df.empty:
             return (None, None)
 
-        # Find the closest trading day on or before the report date
         report_ts = pd.Timestamp(report_date)
         before = df[df.index <= report_ts]
         if before.empty:
@@ -389,8 +235,6 @@ class YFinanceFetcher:
 
         price_before = float(before.iloc[-1]["Close"])
 
-        # Find the price trading_days trading days after the report
-        # Take the row at the index position of the report date + trading_days
         report_idx = before.index[-1]
         try:
             report_pos = df.index.get_loc(report_idx)
@@ -401,37 +245,14 @@ class YFinanceFetcher:
 
         return (price_before, price_after)
 
-    # ── Price Momentum (Technical Analysis) ─────────────────────
-
     def get_price_momentum(
         self,
         ticker: str,
         daily_lookback: int = 20,
         weekly_lookback: int = 4,
     ) -> dict[str, Any]:
-        """
-        Fetch recent OHLCV data and compute price momentum metrics
-        for technical alignment scoring.
-
-        Computes:
-            - daily_momentum_pct: net close change over last N trading days
-            - weekly_momentum_pct: net close change over last N weeks
-            - green_candle_ratio: fraction of days where Close > Open
-            - daily_trend: 'bullish' if daily_momentum > 2%, 'bearish' if < -2%
-            - weekly_trend: 'bullish' if weekly_momentum > 3%, 'bearish' if < -3%
-            - avg_daily_change_pct: mean day-over-day close % change
-
-        Args:
-            ticker: Stock symbol.
-            daily_lookback: Number of trading days for daily momentum.
-            weekly_lookback: Number of weeks for weekly momentum.
-
-        Returns:
-            Dict with momentum metrics.  Values are None when data is
-            unavailable.
-        """
+        """Compute momentum metrics used for technical alignment scoring."""
         try:
-            # Fetch enough data for both daily and weekly windows
             total_days = max(daily_lookback, weekly_lookback * 5) + 10
             t = yf.Ticker(ticker)
             df: pd.DataFrame = t.history(period=f"{total_days}d")
@@ -443,7 +264,6 @@ class YFinanceFetcher:
             closes = df["Close"].values
             opens = df["Open"].values
 
-            # ── Daily momentum ──
             daily_idx = min(daily_lookback, len(closes) - 1)
             if daily_idx > 0 and closes[-1] > 0 and closes[-daily_idx] > 0:
                 daily_momentum_pct = round(
@@ -452,7 +272,7 @@ class YFinanceFetcher:
             else:
                 daily_momentum_pct = None
 
-            # ── Weekly momentum (approximate: every 5 trading days) ──
+            # Approximate weeks as 5 trading days.
             weekly_idx = min(weekly_lookback * 5, len(closes) - 1)
             if weekly_idx > 0 and closes[-1] > 0 and closes[-weekly_idx] > 0:
                 weekly_momentum_pct = round(
@@ -461,7 +281,6 @@ class YFinanceFetcher:
             else:
                 weekly_momentum_pct = None
 
-            # ── Green candle ratio ──
             green_candles = sum(
                 1 for o, c in zip(opens[-daily_lookback:], closes[-daily_lookback:])
                 if c > o
@@ -469,7 +288,6 @@ class YFinanceFetcher:
             candle_count = min(daily_lookback, len(closes))
             green_candle_ratio = round(green_candles / candle_count, 4) if candle_count > 0 else None
 
-            # ── Average daily change ──
             if len(closes) >= 2:
                 daily_changes = [
                     (closes[i] - closes[i - 1]) / closes[i - 1]
@@ -483,7 +301,6 @@ class YFinanceFetcher:
             else:
                 avg_daily_change_pct = None
 
-            # ── Trend determination ──
             daily_trend = None
             if daily_momentum_pct is not None:
                 if daily_momentum_pct > 0.02:
@@ -527,8 +344,6 @@ class YFinanceFetcher:
             "avg_daily_change_pct": None,
             "data_points": 0,
         }
-
-    # ── Batch / multi-ticker ────────────────────────────────────
 
     def get_multiple_infos(self, tickers: list[str]) -> dict[str, StockInfo]:
         """Fetch StockInfo for multiple tickers in one call."""

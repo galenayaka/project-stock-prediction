@@ -2,8 +2,6 @@
 
 namespace App\Models;
 
-use App\Models\DailyPriceHistory;
-use App\Models\Prediction;
 use Database\Factories\CompanyFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
