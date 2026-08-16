@@ -9,9 +9,6 @@ use Illuminate\Http\Request;
 
 final class WatchlistController extends Controller
 {
-    /**
-     * List user's watchlist.
-     */
     public function index(Request $request): JsonResponse
     {
         $watchlist = UserWatchlist::query()
@@ -25,9 +22,6 @@ final class WatchlistController extends Controller
         ]);
     }
 
-    /**
-     * Add a company to the user's watchlist.
-     */
     public function store(StoreWatchlistRequest $request): JsonResponse
     {
         $watchlist = UserWatchlist::create([
@@ -43,9 +37,6 @@ final class WatchlistController extends Controller
         ], 201);
     }
 
-    /**
-     * Remove a company from the user's watchlist.
-     */
     public function destroy(Request $request, UserWatchlist $watchlist): JsonResponse
     {
         if ($watchlist->user_id !== $request->user()->id) {

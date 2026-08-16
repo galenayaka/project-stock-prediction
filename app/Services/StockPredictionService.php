@@ -10,10 +10,6 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
-/**
- * Generates trading signals by sending a company's financial history to the
- * Python ML microservice and blending the result with local price momentum.
- */
 final class StockPredictionService
 {
     private string $baseUrl;
@@ -22,13 +18,10 @@ final class StockPredictionService
 
     public function __construct()
     {
-        $this->baseUrl = rtrim((string) config('services.ml_service.url', 'http://localhost:8001'), '/');
-        $this->apiKey = (string) config('services.ml_service.api_key', '');
+        $this->baseUrl = rtrim((string) config('services.ai.url', 'http://localhost:8001'), '/');
+        $this->apiKey = (string) config('services.ai.api_key', '');
     }
 
-    /**
-     * @throws \RuntimeException|ConnectionException
-     */
     public function predict(Company $company, string $timeframe = '3m'): Prediction
     {
         $financialHistory = $this->buildFinancialHistory($company);
@@ -104,16 +97,21 @@ final class StockPredictionService
                 'predicted_price' => $result['target_price'] ?? null,
                 'confidence_score' => $alignmentResult['adjusted_confidence'],
                 'prediction_direction' => $this->mapSignalToDirection($result['signal_type'] ?? 'hold'),
-                'signal_type' => $result['signal_type'] ?? null,
-                'predicted_return' => $result['predicted_return'] ?? null,
                 'feature_importance' => $this->mapKeyDrivers($alignmentResult['drivers']),
                 'model_metadata' => [
                     'model' => $result['model'] ?? 'xgboost_rf_ensemble',
                     'version' => $result['version'] ?? '1.1.0',
+                    'signal_type' => $result['signal_type'] ?? null,
+                    'predicted_return' => $result['predicted_return'] ?? null,
                     'current_price' => $result['current_price'] ?? null,
                     'confidence_breakdown' => $alignmentResult['confidence_breakdown'],
                     'requested_at' => now()->toIso8601String(),
                 ],
+            ]);
+
+            $prediction->update([
+                'signal_type' => $result['signal_type'] ?? null,
+                'predicted_return' => $result['predicted_return'] ?? null,
             ]);
 
             Log::info('StockPredictionService: prediction completed', [
@@ -144,9 +142,6 @@ final class StockPredictionService
         return $prediction->fresh();
     }
 
-    /**
-     * Check whether the AI microservice is reachable.
-     */
     public function isHealthy(): bool
     {
         try {
@@ -158,9 +153,6 @@ final class StockPredictionService
         }
     }
 
-    /**
-     * @return list<array<string, mixed>>
-     */
     private function buildFinancialHistory(Company $company): array
     {
         return $company->financialStatements()
@@ -188,10 +180,6 @@ final class StockPredictionService
             ->all();
     }
 
-    /**
-     * Normalize user-friendly timeframe labels to the format the
-     * Python service expects ("1m", "3m", "6m", "1y").
-     */
     private function normalizeTimeframe(string $timeframe): string
     {
         return match (mb_strtolower(trim($timeframe))) {
@@ -203,9 +191,6 @@ final class StockPredictionService
         };
     }
 
-    /**
-     * Map the AI signal_type to a prediction_direction string.
-     */
     private function mapSignalToDirection(string $signalType): string
     {
         return match ($signalType) {
@@ -215,13 +200,6 @@ final class StockPredictionService
         };
     }
 
-    /**
-     * Convert KeyDriver objects from the AI response into a storable
-     * feature_importance array.
-     *
-     * @param  list<array{factor:string, impact:string, detail?:string}>  $keyDrivers
-     * @return list<array{feature:string, importance:float, impact:string}>
-     */
     private function mapKeyDrivers(array $keyDrivers): array
     {
         $total = count($keyDrivers) ?: 1;
@@ -235,9 +213,6 @@ final class StockPredictionService
         }, $keyDrivers, array_keys($keyDrivers));
     }
 
-    /**
-     * @return array{net_change_pct: float|null, green_candle_ratio: float|null, technical_signal: string, data_points: int, start_open: float|null, latest_close: float|null, detail: string}
-     */
     public function calculateTechnicalMomentum(Company $company, string $timeframe): array
     {
         $tradingDays = $this->timeframeToTradingDays($timeframe);
@@ -316,12 +291,6 @@ final class StockPredictionService
         ];
     }
 
-    /**
-     * Aligned signals gain confidence; contradictory signals lose it.
-     * Confidence is clamped between 30% and 95%.
-     *
-     * @return array{adjusted_confidence: float, drivers: list<array<string, mixed>>, confidence_breakdown: array<string, mixed>}
-     */
     private function applyTechnicalAlignment(
         string $fundamentalSignal,
         array $techMomentum,
@@ -335,7 +304,6 @@ final class StockPredictionService
         $dataPoints = $techMomentum['data_points'] ?? 0;
         $detail = $techMomentum['detail'] ?? '';
 
-        // Map fundamental signal to bullish/bearish/neutral
         $fundamentalDirection = match ($fundamentalSignal) {
             'buy' => 'bullish',
             'sell' => 'bearish',
@@ -346,7 +314,6 @@ final class StockPredictionService
         $techDriver = null;
         $alignmentResult = 'none';
 
-        // Only adjust when both signals are directional.
         if ($fundamentalDirection !== 'neutral' && $techSignal !== 'neutral' && $dataPoints >= 3) {
             if ($fundamentalDirection === $techSignal) {
                 $adjustment = +0.10;
@@ -377,11 +344,9 @@ final class StockPredictionService
             $alignmentResult = 'insufficient_data';
         }
 
-        // Compute adjusted confidence (clamped between 30% and 95%)
         $rawConfidence = $confidenceScore + $adjustment;
         $adjustedConfidence = round(max(0.30, min(0.95, $rawConfidence)), 4);
 
-        // Build enhanced confidence breakdown
         $laravelTechData = [
             'alignment_result' => $alignmentResult,
             'adjustment' => round($adjustment, 4),
@@ -398,12 +363,10 @@ final class StockPredictionService
             'driver_detail' => $techDriver['detail'] ?? null,
         ];
 
-        // Merge Laravel technical data into the Python confidence breakdown
         $enhancedBreakdown = array_merge($confidenceBreakdown ?: [], [
             'technical_alignment' => $laravelTechData,
         ]);
 
-        // Append tech driver if present
         $drivers = $keyDrivers;
         if ($techDriver !== null) {
             $drivers[] = $techDriver;
@@ -428,10 +391,6 @@ final class StockPredictionService
         ];
     }
 
-    /**
-     * Convert a prediction timeframe to an approximate number of
-     * trading days for querying daily_price_histories.
-     */
     private function timeframeToTradingDays(string $timeframe): int
     {
         return match ($this->normalizeTimeframe($timeframe)) {

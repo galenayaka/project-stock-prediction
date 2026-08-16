@@ -1,5 +1,3 @@
-"""Production launcher: no reload, single worker."""
-
 import uvicorn
 
 if __name__ == "__main__":

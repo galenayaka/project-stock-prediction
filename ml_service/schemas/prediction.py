@@ -1,11 +1,9 @@
-"""Pydantic models defining the request/response contract with Laravel."""
-
 from __future__ import annotations
 
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TargetPeriod(str, Enum):
@@ -68,13 +66,15 @@ class PredictionResponse(BaseModel):
 class HealthResponse(BaseModel):
     """Health check response."""
 
+    model_config = ConfigDict(protected_namespaces=())
+
     status: str = "ok"
     model_loaded: bool
     model_version: str
 
 
 class FinancialRecord(BaseModel):
-    """A single financial-statement snapshot sent by Laravel."""
+    """A single financial-statement snapshot from the Laravel database."""
 
     fiscal_year: int = Field(..., description="Fiscal year of the report.")
     fiscal_quarter: int = Field(..., description="Fiscal quarter (1-4).")
@@ -96,8 +96,6 @@ class FinancialRecord(BaseModel):
 
 
 class EnhancedPredictionRequest(BaseModel):
-    """Request payload for the enhanced prediction endpoint."""
-
     ticker: str = Field(..., description="Stock symbol, e.g. AAPL.")
     timeframe: str = Field(
         default="3m",
@@ -121,8 +119,6 @@ class KeyDriver(BaseModel):
 
 
 class EnhancedPredictionResponse(BaseModel):
-    """Response payload shown on the dashboard after "Run Prediction."""
-
     ticker: str
     timeframe: str
     signal_type: str = Field(..., description="'buy' | 'hold' | 'sell'.")

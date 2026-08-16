@@ -8,9 +8,6 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
-/**
- * Service for interacting with the Python FastAPI ML prediction microservice.
- */
 final class PredictionService
 {
     private string $baseUrl;
@@ -20,15 +17,6 @@ final class PredictionService
         $this->baseUrl = rtrim((string) config('services.ml_service.url', 'http://localhost:8001'), '/');
     }
 
-    /**
-     * Request a stock prediction from the ML microservice.
-     *
-     * @param  array<string, mixed>  $features  Normalized financial features
-     * @param  string  $targetPeriod  One of: 1m, 3m, 6m, 1y
-     * @return array<string, mixed>
-     *
-     * @throws ConnectionException|\RuntimeException
-     */
     public function predict(array $features, string $targetPeriod = '3m'): array
     {
         try {
@@ -67,9 +55,6 @@ final class PredictionService
         return $response->json();
     }
 
-    /**
-     * Check the health of the ML microservice.
-     */
     public function isHealthy(): bool
     {
         try {
@@ -81,11 +66,6 @@ final class PredictionService
         }
     }
 
-    /**
-     * Send financial statement data to the ML service and store the prediction.
-     *
-     * @throws ConnectionException
-     */
     public function predictAndStore(Prediction $prediction): Prediction
     {
         $prediction->markProcessing();
@@ -100,7 +80,6 @@ final class PredictionService
             return $prediction;
         }
 
-        // Build normalized feature vector from the financial statement
         $features = [
             'pe_ratio' => (float) $statement->pe_ratio,
             'debt_to_equity' => (float) $statement->debt_to_equity,
@@ -141,10 +120,6 @@ final class PredictionService
         return $prediction;
     }
 
-    /**
-     * Calculate year-over-year revenue growth percentage.
-     * Returns null if insufficient data.
-     */
     private function calculateRevenueGrowth(?Company $company): ?float
     {
         if (! $company) {

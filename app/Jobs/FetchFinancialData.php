@@ -11,10 +11,6 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
-/**
- * Job to fetch financial data from SEC EDGAR for a given company.
- * Rate-limited to comply with SEC EDGAR's 10 requests/second limit.
- */
 final class FetchFinancialData implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
@@ -41,15 +37,33 @@ final class FetchFinancialData implements ShouldQueue
         private readonly Company $company,
     ) {}
 
+    /**
+     * Execute the job.
+     */
     public function handle(SecApiService $secApi): void
     {
-        $imported = $secApi->importForCompany($this->company);
-
-        Log::info('Financial data imported for company', [
+        Log::info('FetchFinancialData job started', [
             'company_id' => $this->company->id,
             'ticker' => $this->company->ticker,
-            'records' => $imported->count(),
         ]);
+
+        try {
+            $imported = $secApi->importForCompany($this->company);
+
+            Log::info('FetchFinancialData job completed', [
+                'company_id' => $this->company->id,
+                'ticker' => $this->company->ticker,
+                'records' => $imported->count(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('FetchFinancialData job failed', [
+                'company_id' => $this->company->id,
+                'ticker' => $this->company->ticker,
+                'error' => $e->getMessage(),
+            ]);
+
+            throw $e;
+        }
     }
 
     /**

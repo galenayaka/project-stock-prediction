@@ -1,8 +1,4 @@
-"""FastAPI microservice that predicts stock prices.
-
-Combines yfinance market data with an XGBoost + RandomForest ensemble.
-Run with ``python main.py``; interactive docs live at http://localhost:8001/docs.
-"""
+"""FastAPI microservice for stock price prediction."""
 
 from __future__ import annotations
 
@@ -39,7 +35,6 @@ fetcher = YFinanceFetcher()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialise the predictor on startup; no explicit teardown is needed."""
     logger.info("Starting ML Prediction Service...")
     predictor.load_model()
     yield
@@ -50,7 +45,9 @@ app = FastAPI(
     title="Stock Market Prediction Service",
     description=(
         "ML microservice for predicting stock prices from financial features "
-        "and yfinance data via an XGBoost + RandomForest ensemble."
+        "and yfinance data.  Combine fundamental analysis (PE ratio, EPS, ROE, …) "
+        "with technical indicators (moving averages, volatility) via an XGBoost + "
+        "RandomForest ensemble."
     ),
     version="1.1.0",
     lifespan=lifespan,
@@ -66,8 +63,6 @@ app.add_middleware(
 
 
 class TickerRequest(BaseModel):
-    """Generic request for yfinance-based endpoints."""
-
     ticker: str = Field(..., description="Stock symbol, e.g. AAPL, TSLA, MSFT.")
     period: str = Field(
         default="1y",
@@ -80,8 +75,6 @@ class TickerRequest(BaseModel):
 
 
 class TrainRequest(BaseModel):
-    """Request to train the ensemble on a ticker's historical prices."""
-
     ticker: str = Field(..., description="Stock symbol to train on.")
     period: str = Field(
         default="5y",
@@ -102,15 +95,12 @@ class TrainRequest(BaseModel):
 
 
 class PredictFromTickerRequest(BaseModel):
-    """Fetch fundamental features and run a prediction in one call."""
-
     ticker: str = Field(..., description="Stock symbol.")
     target_period: TargetPeriod = Field(default=TargetPeriod.THREE_MONTHS)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health_check() -> HealthResponse:
-    """Report service status and model state."""
     return HealthResponse(
         status="ok",
         model_loaded=predictor.is_loaded,
@@ -120,7 +110,6 @@ async def health_check() -> HealthResponse:
 
 @app.post("/api/v1/predict", response_model=PredictionResponse, tags=["Prediction"])
 async def predict(request: PredictionRequest) -> PredictionResponse:
-    """Predict from manually-provided financial features."""
     try:
         features: dict[str, Any] = request.features
         features["target_period"] = request.target_period.value
@@ -146,7 +135,6 @@ async def predict(request: PredictionRequest) -> PredictionResponse:
 
 @app.post("/api/v1/predict/from-ticker", tags=["Prediction"])
 async def predict_from_ticker(request: PredictFromTickerRequest) -> dict[str, Any]:
-    """Fetch fundamental features for a ticker and predict in one call."""
     try:
         features = fetcher.get_financial_features(request.ticker)
         feature_dict = features.to_dict()
@@ -184,7 +172,6 @@ TIME_PERIOD_MAP: dict[str, int] = {
 async def predict_enhanced(
     request: EnhancedPredictionRequest,
 ) -> EnhancedPredictionResponse:
-    """Enrich financial history with price reactions and return a signal."""
     try:
         ticker = request.ticker.upper()
         timeframe = request.timeframe
@@ -213,7 +200,6 @@ async def predict_enhanced(
                 "reported_date": record.reported_date,
             }
 
-            # If we have a report date, fetch price reaction from yfinance
             if record.reported_date:
                 try:
                     price_before, price_after = fetcher.get_price_reaction(
@@ -246,7 +232,6 @@ async def predict_enhanced(
         tech_alignment_data: dict[str, Any] | None = None
         if tech_driver is not None:
             key_drivers.append(tech_driver)
-            # Capture momentum data for the confidence breakdown
             try:
                 momentum = fetcher.get_price_momentum(ticker)
                 tech_alignment_data = {
@@ -304,7 +289,6 @@ def _compute_key_drivers(
     enriched: list[dict[str, Any]],
     timeframe: str,
 ) -> list[KeyDriver]:
-    """Identify the trends that drive the final BUY/SELL/HOLD signal."""
     drivers: list[KeyDriver] = []
 
     if len(enriched) < 2:
@@ -312,7 +296,7 @@ def _compute_key_drivers(
 
     eps_values = [r.get("eps") for r in enriched if r.get("eps") is not None]
     if len(eps_values) >= 2:
-        eps_change = eps_values[-1] - eps_values[0]
+        eps_change = eps_values[-1] - eps_values[0]   # last minus first
         if eps_change > 0:
             drivers.append(KeyDriver(
                 factor="EPS Growth",
@@ -401,7 +385,6 @@ def _compute_technical_alignment(
     drivers: list[KeyDriver],
     timeframe: str,
 ) -> KeyDriver | None:
-    """Compare fundamental direction with price momentum; return a driver if they agree or clash."""
     if not drivers:
         return None
 
@@ -432,7 +415,6 @@ def _compute_technical_alignment(
     weekly_momentum = momentum.get("weekly_momentum_pct")
     green_ratio = momentum.get("green_candle_ratio")
 
-    # Each trend votes: +1 bullish, -1 bearish.
     technical_signals = []
     if daily_trend == "bullish":
         technical_signals.append(1)
@@ -504,7 +486,6 @@ def _determine_signal(
     trading_days: int,
     tech_alignment_data: dict[str, Any] | None = None,
 ) -> tuple[str, float | None, float, dict[str, Any]]:
-    """Turn driver balance into a signal, predicted return and confidence score."""
     positive = sum(1 for d in drivers if d.impact == "positive")
     negative = sum(1 for d in drivers if d.impact == "negative")
     neutral = sum(1 for d in drivers if d.impact == "neutral")
@@ -572,7 +553,6 @@ def _determine_signal(
 
 @app.post("/api/v1/data/stock-info", tags=["Data"])
 async def get_stock_info(request: TickerRequest) -> dict[str, Any]:
-    """Return structured stock metadata from Yahoo Finance."""
     try:
         info = fetcher.get_stock_info(request.ticker)
         return {
@@ -597,7 +577,6 @@ async def get_stock_info(request: TickerRequest) -> dict[str, Any]:
 
 @app.post("/api/v1/data/historical", tags=["Data"])
 async def get_historical(request: TickerRequest) -> dict[str, Any]:
-    """Return historical OHLCV prices for a ticker."""
     try:
         data = fetcher.get_historical_prices(
             request.ticker,
@@ -618,7 +597,6 @@ async def get_historical(request: TickerRequest) -> dict[str, Any]:
 
 @app.post("/api/v1/data/financial-features", tags=["Data"])
 async def get_financial_features(request: TickerRequest) -> dict[str, Any]:
-    """Return the 11 fundamental features used by the prediction model."""
     try:
         features = fetcher.get_financial_features(request.ticker)
         return {
@@ -634,7 +612,6 @@ async def get_financial_features(request: TickerRequest) -> dict[str, Any]:
 
 @app.post("/api/v1/train", tags=["Training"])
 async def train_model(request: TrainRequest) -> dict[str, Any]:
-    """Train the ensemble on a ticker's historical prices."""
     try:
         logger.info(
             "Training on %s (period=%s, target_days=%d)...",

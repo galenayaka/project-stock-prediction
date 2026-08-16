@@ -12,9 +12,6 @@ use Illuminate\Support\Facades\Log;
 
 final class PredictionController extends Controller
 {
-    /**
-     * List predictions for a company.
-     */
     public function index(Company $company): JsonResponse
     {
         $predictions = $company->predictions()
@@ -32,9 +29,6 @@ final class PredictionController extends Controller
         ]);
     }
 
-    /**
-     * Show a specific prediction.
-     */
     public function show(Prediction $prediction): JsonResponse
     {
         $prediction->load(['company', 'financialStatement']);
@@ -44,9 +38,6 @@ final class PredictionController extends Controller
         ]);
     }
 
-    /**
-     * Run a prediction via the ML microservice and return the result.
-     */
     public function store(
         TriggerPredictionRequest $request,
         Company $company,

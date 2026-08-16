@@ -91,9 +91,6 @@ class MlStart extends Command
         return self::SUCCESS;
     }
 
-    /**
-     * Check if the ML service is already running on the given port.
-     */
     private function isServiceRunning(string $port): bool
     {
         try {
@@ -105,9 +102,6 @@ class MlStart extends Command
         }
     }
 
-    /**
-     * Find a usable Python executable.
-     */
     private function findPython(): ?string
     {
         $candidates = ['python', 'python3', 'py'];

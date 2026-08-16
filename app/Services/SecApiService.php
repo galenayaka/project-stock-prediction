@@ -10,10 +10,6 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
-/**
- * Service for fetching financial data from the SEC EDGAR API.
- * Uses the SEC's XBRL API for standardized financial statement data.
- */
 final class SecApiService
 {
     private const SEC_API_BASE = 'https://data.sec.gov/api/xbrl';
@@ -44,10 +40,6 @@ final class SecApiService
         $this->connectTimeout = (int) config('services.sec_edgar.connect_timeout', 15);
     }
 
-    /**
-     * Enforce the SEC's 10-requests-per-second rate limit by sleeping
-     * if the last call was made less than MIN_REQUEST_INTERVAL ago.
-     */
     private function respectRateLimit(): void
     {
         $now = microtime(true);
@@ -61,10 +53,6 @@ final class SecApiService
         self::$lastRequestTime = microtime(true);
     }
 
-    /**
-     * Build an HTTP client preconfigured with User-Agent, timeouts and
-     * exponential backoff for rate-limited responses.
-     */
     private function httpClient(): PendingRequest
     {
         return Http::withHeaders([
@@ -90,13 +78,6 @@ final class SecApiService
             });
     }
 
-    /**
-     * Fetch company facts (XBRL-tagged financial data) from SEC.
-     *
-     * @return array<string, mixed>
-     *
-     * @throws ConnectionException|\RuntimeException
-     */
     public function fetchCompanyFacts(string $cik): array
     {
         $cikPadded = str_pad($cik, 10, '0', STR_PAD_LEFT);
@@ -158,13 +139,6 @@ final class SecApiService
         return $response->json();
     }
 
-    /**
-     * Fetch the latest submissions metadata for a company.
-     *
-     * @return array<string, mixed>
-     *
-     * @throws ConnectionException|\RuntimeException
-     */
     public function fetchSubmissions(string $cik): array
     {
         $cikPadded = str_pad($cik, 10, '0', STR_PAD_LEFT);
@@ -200,12 +174,6 @@ final class SecApiService
         return $response->json();
     }
 
-    /**
-     * Extract standardized financial metrics from SEC facts data.
-     *
-     * @param  array<string, mixed>  $facts
-     * @return Collection<int, array<string, mixed>>
-     */
     public function extractFinancialMetrics(array $facts): Collection
     {
         /** @var array<string, array<string, mixed>> $metrics */
@@ -213,6 +181,7 @@ final class SecApiService
 
         $usGaap = $facts['facts']['us-gaap'] ?? [];
 
+        // Map SEC XBRL tags to our financial statement columns.
         $metricMappings = [
             // Revenue
             'RevenueFromContractWithCustomerExcludingAssessedTax' => 'revenue',
@@ -279,13 +248,6 @@ final class SecApiService
             ->map(fn (array $m) => $this->computeDerivedRatios($m));
     }
 
-    /**
-     * Convert raw SEC dollar values into the ratios expected by the
-     * gross_margin, operating_margin, roe and roa columns.
-     *
-     * @param  array<string, mixed>  $metric
-     * @return array<string, mixed>
-     */
     private function computeDerivedRatios(array $metric): array
     {
         $revenue = (float) ($metric['revenue'] ?? 0);
@@ -322,13 +284,6 @@ final class SecApiService
         return $metric;
     }
 
-    /**
-     * Import financial data for a company from SEC into the database.
-     *
-     * @return Collection<int, FinancialStatement>
-     *
-     * @throws ConnectionException|\RuntimeException
-     */
     public function importForCompany(Company $company): Collection
     {
         if (! $company->cik) {

@@ -9,11 +9,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 
-/**
- * Job to run an ML prediction via the Python FastAPI microservice.
- * Processes a single Prediction record asynchronously.
- */
 final class RunPrediction implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
@@ -40,9 +37,30 @@ final class RunPrediction implements ShouldQueue
         private readonly Prediction $prediction,
     ) {}
 
+    /**
+     * Execute the job.
+     */
     public function handle(PredictionService $predictionService): void
     {
-        $predictionService->predictAndStore($this->prediction);
+        Log::info('RunPrediction job started', [
+            'prediction_id' => $this->prediction->id,
+            'company_id' => $this->prediction->company_id,
+        ]);
+
+        try {
+            $predictionService->predictAndStore($this->prediction);
+
+            Log::info('RunPrediction job completed', [
+                'prediction_id' => $this->prediction->id,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('RunPrediction job failed', [
+                'prediction_id' => $this->prediction->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            throw $e;
+        }
     }
 
     /**

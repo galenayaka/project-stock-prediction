@@ -1,4 +1,4 @@
-"""ML model that predicts stock prices from fundamental and technical data."""
+"""ML predictor: XGBoost + RandomForest ensemble for stock price prediction."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from schemas.prediction import FeatureImportance, PredictionDirection
 
 logger = logging.getLogger(__name__)
 
-
+# Features expected by the fundamental prediction model.
 REQUIRED_FEATURES: list[str] = [
     "pe_ratio",
     "debt_to_equity",
@@ -63,7 +63,7 @@ TECHNICAL_FEATURES: list[str] = [
 
 
 class StockPredictor:
-    """Stock price predictor using an ensemble of XGBoost and RandomForest."""
+    """Stock price predictor using an XGBoost + RandomForest ensemble."""
 
     MODEL_VERSION = "1.1.0"
 
@@ -76,7 +76,6 @@ class StockPredictor:
         self._train_metrics: dict[str, float] = {}
 
     def load_model(self) -> None:
-        """Initialise untrained model objects; call train_on_price_history() to fit."""
         logger.info("Initializing model...")
         self.xgb_model = xgb.XGBRegressor(
             n_estimators=100,
@@ -110,7 +109,6 @@ class StockPredictor:
         df: pd.DataFrame,
         test_size: float = 0.2,
     ) -> dict[str, float]:
-        """Train the ensemble on engineered OHLCV features using a chronological split."""
         if "target_close" not in df.columns:
             raise ValueError("DataFrame must contain 'target_close' column as the target.")
 
@@ -153,7 +151,6 @@ class StockPredictor:
         return self._train_metrics
 
     def _prepare_features(self, features: dict[str, Any]) -> np.ndarray:
-        """Extract and normalise the fundamental feature vector from input."""
         feature_values: list[float] = []
         for feat in REQUIRED_FEATURES:
             val = features.get(feat)
@@ -163,7 +160,6 @@ class StockPredictor:
         return np.array(feature_values).reshape(1, -1)
 
     def predict(self, features: dict[str, Any]) -> dict[str, Any]:
-        """Predict from fundamental features using the weighted heuristic."""
         if not self._is_loaded:
             self.load_model()
 
@@ -200,18 +196,15 @@ class StockPredictor:
         self,
         ohlcv_features: dict[str, float],
     ) -> dict[str, Any]:
-        """Forecast the next close using the trained ensemble."""
         if not self._is_trained:
             raise RuntimeError("Model is not trained. Call train_on_price_history() first.")
 
         feature_cols = [c for c in TECHNICAL_FEATURES if c in ohlcv_features]
         X = np.array([[ohlcv_features.get(c, 0.0) for c in feature_cols]])
-
         X_scaled = self.scaler.transform(X)
 
         xgb_pred = float(self.xgb_model.predict(X_scaled)[0])
         rf_pred = float(self.rf_model.predict(X_scaled)[0])
-
         predicted_price = round((xgb_pred + rf_pred) / 2.0, 4)
 
         return {
@@ -222,9 +215,9 @@ class StockPredictor:
             "model": "xgboost_rf_ensemble",
             "version": self.MODEL_VERSION,
         }
+        
 
     def _predict_from_fundamentals(self, features: dict[str, Any]) -> float:
-        """Estimate price from financial ratios using a weighted formula."""
         weights = {
             "pe_ratio": -0.5,
             "debt_to_equity": -0.4,
@@ -257,7 +250,6 @@ class StockPredictor:
         return round(min(0.3 + (n_provided / len(REQUIRED_FEATURES)) * 0.7, 0.95), 4)
 
     def _get_feature_importance(self) -> list[FeatureImportance]:
-        """Return feature importance from XGBoost, or a sensible default order."""
         if self._is_trained and self.xgb_model is not None:
             try:
                 importances = self.xgb_model.feature_importances_

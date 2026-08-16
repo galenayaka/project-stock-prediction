@@ -8,19 +8,12 @@ use App\Models\Prediction;
 use App\Services\PredictionService;
 use Illuminate\Support\Facades\Log;
 
-/**
- * Action to trigger a stock price prediction for a company.
- * Creates a Prediction record and dispatches it to the ML queue.
- */
 final class TriggerPrediction
 {
     public function __construct(
         private readonly PredictionService $predictionService,
     ) {}
 
-    /**
-     * Trigger a prediction for a company based on its latest financial statement.
-     */
     public function handle(Company $company, string $targetPeriod = '3m'): Prediction
     {
         $statement = $company->latestFinancialStatement();
@@ -43,6 +36,7 @@ final class TriggerPrediction
             'target_period' => $targetPeriod,
         ]);
 
+        // Dispatch to queue for async processing
         RunPrediction::dispatch($prediction);
 
         return $prediction;

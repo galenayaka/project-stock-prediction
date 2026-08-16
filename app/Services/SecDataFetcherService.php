@@ -9,13 +9,6 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
-/**
- * Service for fetching OHLC price history data.
- *
- * Uses the Python ML microservice (which wraps yfinance) to pull
- * daily/weekly OHLCV candles and stores them in the
- * daily_price_histories table.
- */
 final class SecDataFetcherService
 {
     private string $baseUrl;
@@ -24,18 +17,12 @@ final class SecDataFetcherService
 
     public function __construct()
     {
-        $this->baseUrl = rtrim((string) config('services.ml_service.url', 'http://localhost:8001'), '/');
-        $this->apiKey = (string) config('services.ml_service.api_key', '');
+        $this->baseUrl = rtrim((string) config('services.ai.url', 'http://localhost:8001'), '/');
+        $this->apiKey = (string) config('services.ai.api_key', '');
     }
 
     /**
-     * Fetch OHLC history for a company from the ML service and store it.
-     *
-     * @param  string  $timeframe  One of: '1W', '1M', '3M', '6M', '1Y', '5Y'
-     * @param  string  $interval  One of: '1d', '1wk', '1mo'
      * @return Collection<int, DailyPriceHistory>
-     *
-     * @throws ConnectionException|\RuntimeException
      */
     public function fetchOhlcHistory(
         Company $company,
@@ -77,8 +64,10 @@ final class SecDataFetcherService
                 );
             }
 
-            /** @var list<array<string, mixed>> $candles */
-            $candles = $response->json('data', []);
+            /** @var array{candles?: list<array<string, mixed>>} $data */
+            $data = $response->json('data', $response->json());
+
+            $candles = $data['candles'] ?? $data['data'] ?? $data;
 
             if (! is_array($candles) || empty($candles)) {
                 Log::warning('SecDataFetcherService: no candles returned', [
@@ -99,12 +88,12 @@ final class SecDataFetcherService
         $imported = collect();
 
         foreach ($candles as $candle) {
-            $date = $candle['date'] ?? null;
-            $open = $candle['open'] ?? null;
-            $high = $candle['high'] ?? null;
-            $low = $candle['low'] ?? null;
-            $close = $candle['close'] ?? null;
-            $volume = $candle['volume'] ?? null;
+            $date = $candle['date'] ?? $candle['Date'] ?? null;
+            $open = $candle['open'] ?? $candle['Open'] ?? null;
+            $high = $candle['high'] ?? $candle['High'] ?? null;
+            $low = $candle['low'] ?? $candle['Low'] ?? null;
+            $close = $candle['close'] ?? $candle['Close'] ?? null;
+            $volume = $candle['volume'] ?? $candle['Volume'] ?? null;
 
             if (! $date || $close === null) {
                 continue;
@@ -133,7 +122,6 @@ final class SecDataFetcherService
             $imported->push($record);
         }
 
-        // Update the company's latest price from the most recent close.
         $latest = $imported->last();
         if ($latest instanceof DailyPriceHistory && $latest->close !== null) {
             $company->update([
@@ -151,9 +139,6 @@ final class SecDataFetcherService
         return $imported;
     }
 
-    /**
-     * Check whether the data service is reachable.
-     */
     public function isHealthy(): bool
     {
         try {
@@ -165,11 +150,6 @@ final class SecDataFetcherService
         }
     }
 
-    // ── Private helpers ────────────────────────────────────────────
-
-    /**
-     * Normalize user-friendly timeframes to yfinance period strings.
-     */
     private function normalizeTimeframe(string $timeframe): string
     {
         return match (strtoupper($timeframe)) {

@@ -1,4 +1,4 @@
-"""Wrap yfinance to fetch stock metadata, fundamentals and OHLCV history."""
+"""Yahoo Finance data fetching backed by yfinance."""
 
 from __future__ import annotations
 
@@ -33,7 +33,6 @@ class StockInfo:
 
 @dataclass
 class FinancialFeatures:
-    """Feature vector matching StockPredictor's REQUIRED_FEATURES."""
     ticker: str
     pe_ratio: float
     debt_to_equity: float
@@ -107,7 +106,6 @@ class YFinanceFetcher:
         period: str = "1y",
         interval: str = "1d",
     ) -> list[dict[str, Any]]:
-        """Fetch historical OHLCV data as JSON-serialisable dicts."""
         t = yf.Ticker(ticker)
         df: pd.DataFrame = t.history(period=period, interval=interval)
 
@@ -116,17 +114,14 @@ class YFinanceFetcher:
             return []
 
         df = df.reset_index()
-        # yfinance returns a Date column (TZ-aware); convert to string
         if "Date" in df.columns:
             df["Date"] = df["Date"].dt.strftime("%Y-%m-%dT%H:%M:%S%z")
 
-        # Rename columns to lowercase snake_case
         df.columns = [c.lower().replace(" ", "_") for c in df.columns]
 
         return df.where(pd.notna(df), None).to_dict(orient="records")
 
     def get_financial_features(self, ticker: str) -> FinancialFeatures:
-        """Extract the 11 features required by StockPredictor from Yahoo Finance."""
         t = yf.Ticker(ticker)
         info = t.info or {}
 
@@ -157,9 +152,7 @@ class YFinanceFetcher:
         pe_ratio = _safe("trailingPE") or _safe("forwardPE")
         eps = _safe("trailingEps")
         market_cap = _safe("marketCap")
-
         revenue_growth = _safe("revenueGrowth")
-
         latest_price = _safe("currentPrice") or _safe("regularMarketPrice") or _safe("previousClose")
 
         return FinancialFeatures(
@@ -184,14 +177,13 @@ class YFinanceFetcher:
         period: str = "5y",
         target_days_ahead: int = 60,
     ) -> pd.DataFrame:
-        """Build a labelled training DataFrame with engineered technical features."""
         t = yf.Ticker(ticker)
         df: pd.DataFrame = t.history(period=period)
 
         if df.empty:
             raise ValueError(f"No historical data for ticker '{ticker}' (period={period})")
 
-        # Shift close price backward to build the supervised target.
+        # target = close price target_days_ahead trading days later
         df["target_close"] = df["Close"].shift(-target_days_ahead)
 
         df["returns_5d"] = df["Close"].pct_change(5)
@@ -212,7 +204,6 @@ class YFinanceFetcher:
         report_date_str: str,
         trading_days: int = 63,
     ) -> tuple[float | None, float | None]:
-        """Return (price_before, price_after) around a report date, or (None, None)."""
         try:
             report_date = datetime.fromisoformat(report_date_str.replace("Z", "+00:00"))
         except (ValueError, TypeError):
@@ -251,7 +242,6 @@ class YFinanceFetcher:
         daily_lookback: int = 20,
         weekly_lookback: int = 4,
     ) -> dict[str, Any]:
-        """Compute momentum metrics used for technical alignment scoring."""
         try:
             total_days = max(daily_lookback, weekly_lookback * 5) + 10
             t = yf.Ticker(ticker)
@@ -272,7 +262,6 @@ class YFinanceFetcher:
             else:
                 daily_momentum_pct = None
 
-            # Approximate weeks as 5 trading days.
             weekly_idx = min(weekly_lookback * 5, len(closes) - 1)
             if weekly_idx > 0 and closes[-1] > 0 and closes[-weekly_idx] > 0:
                 weekly_momentum_pct = round(

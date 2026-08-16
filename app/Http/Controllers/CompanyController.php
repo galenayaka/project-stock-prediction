@@ -14,9 +14,6 @@ use Illuminate\View\View;
 
 final class CompanyController extends Controller
 {
-    /**
-     * Display a listing of companies with top buy/sell rankings.
-     */
     public function index(Request $request): View
     {
         $companies = Company::query()
@@ -61,10 +58,6 @@ final class CompanyController extends Controller
         ));
     }
 
-    /**
-     * Rank every company by prediction strength: buys first, then holds,
-     * then sells, then companies without predictions.
-     */
     public function rankings(): View
     {
         $ranked = Company::query()
@@ -90,9 +83,6 @@ final class CompanyController extends Controller
         return view('companies.rankings', compact('ranked'));
     }
 
-    /**
-     * Show a single company with financial data and predictions.
-     */
     public function show(Company $company): View
     {
         $company->load([
@@ -105,7 +95,10 @@ final class CompanyController extends Controller
             ->orderBy('fiscal_quarter')
             ->get();
 
-        $chartData = $statements;
+        $chartData = $company->financialStatements()
+            ->orderBy('fiscal_year')
+            ->orderBy('fiscal_quarter')
+            ->get();
 
         $latestPrediction = $company->latestPrediction();
         $predictionData = null;
@@ -125,7 +118,6 @@ final class CompanyController extends Controller
             ];
         }
 
-        // Build statements data for Alpine.js table initialization
         $statementsData = $statements->map(fn ($s) => [
             'id' => $s->id,
             'fiscal_year' => $s->fiscal_year,
@@ -150,9 +142,6 @@ final class CompanyController extends Controller
         ));
     }
 
-    /**
-     * Store a newly created company.
-     */
     public function store(StoreCompanyRequest $request): RedirectResponse
     {
         $company = Company::create($request->validated());
@@ -162,9 +151,6 @@ final class CompanyController extends Controller
             ->with('success', "Company {$company->ticker} added successfully.");
     }
 
-    /**
-     * Trigger financial data import from SEC for a company.
-     */
     public function importFinancials(Company $company, ImportFinancialData $importer): RedirectResponse
     {
         try {
@@ -180,9 +166,6 @@ final class CompanyController extends Controller
         }
     }
 
-    /**
-     * Trigger a prediction for a company.
-     */
     public function triggerPrediction(Company $company, TriggerPrediction $trigger): RedirectResponse
     {
         try {
@@ -219,9 +202,6 @@ final class CompanyController extends Controller
         ]);
     }
 
-    /**
-     * API: Show a single company.
-     */
     public function apiShow(Company $company): JsonResponse
     {
         $company->load([
@@ -243,10 +223,6 @@ final class CompanyController extends Controller
         ], 201);
     }
 
-    /**
-     * Called by the Alpine.js "Import SEC Data" button to refresh the
-     * statements table inline.
-     */
     public function apiImportFinancials(Company $company, ImportFinancialData $importer): JsonResponse
     {
         try {

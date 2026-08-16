@@ -58,9 +58,6 @@ class Prediction extends Model
         return $this->belongsTo(FinancialStatement::class);
     }
 
-    /**
-     * Check if this prediction is actionable (has meaningful data).
-     */
     public function isActionable(): bool
     {
         return $this->status === 'completed'
@@ -69,19 +66,11 @@ class Prediction extends Model
             && $this->confidence_score >= 0.5;
     }
 
-    /**
-     * Mark prediction as processing.
-     */
     public function markProcessing(): void
     {
         $this->update(['status' => 'processing']);
     }
 
-    /**
-     * Mark prediction as completed with results.
-     *
-     * @param  array<string, mixed>  $results
-     */
     public function markCompleted(array $results): void
     {
         $this->update([
@@ -89,16 +78,11 @@ class Prediction extends Model
             'predicted_price' => $results['predicted_price'] ?? null,
             'confidence_score' => $results['confidence_score'] ?? null,
             'prediction_direction' => $results['prediction_direction'] ?? null,
-            'signal_type' => $results['signal_type'] ?? null,
-            'predicted_return' => $results['predicted_return'] ?? null,
             'feature_importance' => $results['feature_importance'] ?? null,
             'model_metadata' => $results['model_metadata'] ?? null,
         ]);
     }
 
-    /**
-     * Mark prediction as failed.
-     */
     public function markFailed(string $errorMessage): void
     {
         $this->update([
