@@ -288,14 +288,14 @@ Supporting flows for managing companies and user watchlists.
 ```mermaid
 graph TD
     A[Browser: Add Company Form] --> B[POST /companies]
-    B --> C[CompanyController@store]
+    B --> C["CompanyController@store"]
     C --> D[StoreCompanyRequest validates]
     D --> E[Company::create]
     E --> F[(companies table)]
     E --> G[Redirect to company show page]
 
     H[Browser: Company Listing] --> I[GET /companies]
-    I --> J[CompanyController@index]
+    I --> J["CompanyController@index"]
     J --> K[Query with sector/search filters]
     K --> L[Paginate 25 per page]
     L --> M[View: companies/index.blade.php]
